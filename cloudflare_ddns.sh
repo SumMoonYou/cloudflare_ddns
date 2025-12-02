@@ -79,7 +79,7 @@ if [[ "\$CURRENT_IP" != "\$LAST_IP" ]]; then
     RESPONSE=\$(curl -s -X PATCH "https://api.cloudflare.com/client/v4/zones/\$ZONE_ID/dns_records/\$DNS_RECORD_ID" \
         -H "Authorization: Bearer \$CF_API_TOKEN" \
         -H "Content-Type: application/json" \
-        --data "{\"type\":\"A\",\"name\":\"$DOMAIN_NAME\",\"content\":\"\$CURRENT_IP\",\"ttl\":1,\"proxied\":false}")
+        --data "{\"type\":\"A\",\"name\":\"${DOMAIN_NAME}\",\"content\":\"${CURRENT_IP}\",\"ttl\":1,\"proxied\":false}")
 
     if echo "\$RESPONSE" | grep -q '"success":true'; then
         
@@ -105,8 +105,8 @@ MSG="
 \`$CURRENT_TIME\`
 
 🔍 *IP 查询：*
-• https://ip.sb/ip/$CURRENT_IP
-• http://ip-api.com/json/$CURRENT_IP
+• [ip.sb](https://ip.sb/ip/$CURRENT_IP)
+• [ip-api](http://ip-api.com/json/$CURRENT_IP)
 
 ———————————————
 🎉 *更新成功！DNS 已同步完成。*
