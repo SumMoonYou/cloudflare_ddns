@@ -57,7 +57,9 @@ TG_BOT_TOKEN="$TG_BOT_TOKEN"
 TG_CHAT_ID="$TG_CHAT_ID"
 EOF
 
-### ========================== 运行脚本生成 ==========================
+
+
+### ========================== 主运行脚本 ==========================
 cat > $SCRIPT_FILE <<EOF
 #!/bin/bash
 source $CONFIG_FILE
@@ -74,35 +76,45 @@ LAST_IP=\$(cat /var/lib/cf_last_ip.txt)
 
 # 如果 IP 发生变化，则更新 Cloudflare 记录
 if [[ "\$CURRENT_IP" != "\$LAST_IP" ]]; then
-    # 更新 Cloudflare DNS 记录
     RESPONSE=\$(curl -s -X PATCH "https://api.cloudflare.com/client/v4/zones/\$ZONE_ID/dns_records/\$DNS_RECORD_ID" \
         -H "Authorization: Bearer \$CF_API_TOKEN" \
         -H "Content-Type: application/json" \
         --data "{\"type\":\"A\",\"name\":\"$DOMAIN_NAME\",\"content\":\"\$CURRENT_IP\",\"ttl\":1,\"proxied\":false}")
 
     if echo "\$RESPONSE" | grep -q '"success":true'; then
-        # 更新本地记录
+        
         echo "\$CURRENT_IP" > /var/lib/cf_last_ip.txt
 
-        ### ============== Telegram 推送（风格 3） ==============
+        ### ============== Telegram 通知（精美版） ==============
         if [[ -n "\$TG_BOT_TOKEN" && -n "\$TG_CHAT_ID" ]]; then
-            MSG="🚀 *DNS 记录已成功更新！*
+            
+MSG="
+✨ *Cloudflare DNS 自动更新通知*
 
-🌐 *域 名* : \`$DOMAIN_NAME\`
-━━━━━━━━━━━━━━
-🆕 *新 IP* : \`$CURRENT_IP\`
-📍 *归属地* : *\$COUNTRY* — \$ISP
-━━━━━━━━━━━━━━
-🕒 *更 新 时 间* : \`$CURRENT_TIME\`
+📌 *域名：*
+\`$DOMAIN_NAME\`
 
-🔎 *IP快速查询*
-• [ip.sb](https://ip.sb/ip/$CURRENT_IP)
-• [ip-api](http://ip-api.com/json/$CURRENT_IP)
+🆕 *新 IP：*
+\`$CURRENT_IP\`
 
-💡 已完成同步，无需手动处理。🥳"
+🌏 *IP 信息：*
+• *国家地区：* \$COUNTRY  
+• *运营商：* \$ISP  
+
+⏰ *更新时间：*
+\`$CURRENT_TIME\`
+
+🔍 *IP 查询：*
+• https://ip.sb/ip/$CURRENT_IP
+• http://ip-api.com/json/$CURRENT_IP
+
+———————————————
+🎉 *更新成功！DNS 已同步完成。*
+"
             curl -s -X POST "https://api.telegram.org/bot\$TG_BOT_TOKEN/sendMessage" \
                 -d "chat_id=\$TG_CHAT_ID&parse_mode=Markdown&text=\$MSG"
         fi
+
         echo "[$CURRENT_TIME] 已更新 → \$CURRENT_IP (\$COUNTRY / \$ISP)" >> $LOG_FILE
     else
         echo "[$CURRENT_TIME] Cloudflare 更新失败" >> $LOG_FILE
@@ -122,14 +134,14 @@ else
     echo "⏰ 已创建定时任务（每小时执行一次）"
 fi
 
-echo "✨ 安装完成 → DDNS 已开始运行！"
+echo "✨ 安装完成 → DDNS 已启动！"
 }
 
 ### ========================== 卸载 ==========================
 uninstall(){
 rm -f $CONFIG_FILE $SCRIPT_FILE $IP_FILE
 crontab -l | grep -v "cf_ddds_run.sh" | crontab -
-echo "🗑️ 已卸载并清理所有自动任务配置。"
+echo "🗑️ 已卸载并清理所有配置。"
 }
 
 menu
