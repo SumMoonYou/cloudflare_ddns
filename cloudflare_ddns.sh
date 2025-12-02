@@ -68,20 +68,23 @@ IP_INFO=\$(curl -s "http://ip-api.com/json/\$CURRENT_IP?lang=zh-CN")
 COUNTRY=\$(echo "\$IP_INFO" | grep -oP '(?<="country":").*?(?=")')
 ISP=\$(echo "\$IP_INFO" | grep -oP '(?<="isp":").*?(?=")')
 
-[[ ! -f "$IP_FILE" ]] && echo "\$CURRENT_IP" > $IP_FILE
-LAST_IP=\$(cat $IP_FILE)
+# 如果文件不存在则保存当前 IP
+[[ ! -f "/var/lib/cf_last_ip.txt" ]] && echo "\$CURRENT_IP" > /var/lib/cf_last_ip.txt
+LAST_IP=\$(cat /var/lib/cf_last_ip.txt)
 
+# 如果 IP 发生变化，则更新 Cloudflare 记录
 if [[ "\$CURRENT_IP" != "\$LAST_IP" ]]; then
-    
+    # 更新 Cloudflare DNS 记录
     RESPONSE=\$(curl -s -X PATCH "https://api.cloudflare.com/client/v4/zones/\$ZONE_ID/dns_records/\$DNS_RECORD_ID" \
-    -H "Authorization: Bearer \$CF_API_TOKEN" \
-    -H "Content-Type: application/json" \
-    --data "{\\"type\\":\\"A\\",\\"name\\":\\"$DOMAIN_NAME\\",\\"content\\":\\"$CURRENT_IP\\",\\"ttl\\":1,\\"proxied\\":false}")
+        -H "Authorization: Bearer \$CF_API_TOKEN" \
+        -H "Content-Type: application/json" \
+        --data "{\"type\":\"A\",\"name\":\"$DOMAIN_NAME\",\"content\":\"\$CURRENT_IP\",\"ttl\":1,\"proxied\":false}")
 
     if echo "\$RESPONSE" | grep -q '"success":true'; then
-        echo "\$CURRENT_IP" > $IP_FILE
+        # 更新本地记录
+        echo "\$CURRENT_IP" > /var/lib/cf_last_ip.txt
 
-        ### ============== Telegram  推送（风格3） ==============
+        ### ============== Telegram 推送（风格 3） ==============
         if [[ -n "\$TG_BOT_TOKEN" && -n "\$TG_CHAT_ID" ]]; then
             MSG="🚀 *DNS 记录已成功更新！*
 
@@ -93,17 +96,19 @@ if [[ "\$CURRENT_IP" != "\$LAST_IP" ]]; then
 🕒 *更 新 时 间* : \`$CURRENT_TIME\`
 
 🔎 *IP快速查询*
-• https://ip.sb/ip/$CURRENT_IP
-• http://ip-api.com/json/$CURRENT_IP
+• [ip.sb](https://ip.sb/ip/$CURRENT_IP)
+• [ip-api](http://ip-api.com/json/$CURRENT_IP)
 
 💡 已完成同步，无需手动处理。🥳"
             curl -s -X POST "https://api.telegram.org/bot\$TG_BOT_TOKEN/sendMessage" \
-            -d "chat_id=\$TG_CHAT_ID&parse_mode=Markdown&text=\$MSG"
+                -d "chat_id=\$TG_CHAT_ID&parse_mode=Markdown&text=\$MSG"
         fi
-        echo "[\$CURRENT_TIME] 已更新 → \$CURRENT_IP (\$COUNTRY / \$ISP)" >> $LOG_FILE
+        echo "[$CURRENT_TIME] 已更新 → \$CURRENT_IP (\$COUNTRY / \$ISP)" >> $LOG_FILE
+    else
+        echo "[$CURRENT_TIME] Cloudflare 更新失败" >> $LOG_FILE
     fi
 else
-    echo "[\$CURRENT_TIME] IP 未变化 → \$CURRENT_IP" >> $LOG_FILE
+    echo "[$CURRENT_TIME] IP 未变化 → \$CURRENT_IP" >> $LOG_FILE
 fi
 EOF
 
