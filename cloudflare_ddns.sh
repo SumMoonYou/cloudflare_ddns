@@ -101,16 +101,13 @@ TG_BOT_TOKEN="$TG_BOT_TOKEN"
 TG_CHAT_ID="$TG_CHAT_ID"
 EOF
 
-    # 创建主运行脚本
     create_run_script
-
-    # 添加定时任务
     add_cron
 
     echo "✨ 安装完成 → DDNS 已启动！"
 }
 
-# ================== 升级流程（保留配置） ==================
+# ================== 升级流程 ==================
 upgrade(){
     install_dependencies
 
@@ -147,10 +144,10 @@ LOG_FILE="/var/log/cf_ddds.log"
 
 LAST_IP=$(cat $IP_FILE)
 
-# ================== MarkdownV2 转义函数 ==================
+# ================== MarkdownV2 完整转义 ==================
 escape_md2() {
     local text="$1"
-    # Telegram MarkdownV2 所有保留字符转义
+    # Telegram MarkdownV2 所有保留字符都转义
     echo "$text" | sed -E 's/([_\*\[\]\(\)\~\`\>\#\+\-\=\|\{\}\.\!])/\\\1/g'
 }
 
@@ -171,18 +168,17 @@ if [[ "$CURRENT_IP" != "$LAST_IP" || "$FORCE_UPDATE" == "force" ]]; then
         
         if echo "$RESPONSE" | grep -q '"success":true'; then
             echo "$CURRENT_IP" > $IP_FILE
-            UPDATE_SUCCESS=true
             echo "[$CURRENT_TIME] Cloudflare DNS 更新成功 → $CURRENT_IP" >> $LOG_FILE
         else
             echo "[$CURRENT_TIME] Cloudflare DNS 更新失败" >> $LOG_FILE
         fi
     }
 
-    # ==== Telegram 通知（夜间 0-6 点静默） ====
+    # ==== Telegram 消息（夜间静默 0-6 点） ====
     {
         HOUR=$(TZ="Asia/Shanghai" date +%H)
         SEND_TG=true
-        if (( HOUR >= 0 && HOUR < 6 )); then
+        if (( HOUR >=0 && HOUR < 6 )); then
             SEND_TG=false
         fi
 
