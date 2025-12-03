@@ -25,6 +25,34 @@ get_dns_record_id() {
     fi
 }
 
+# 检查是否在禁用时段内
+check_disabled_time() {
+    # 获取用户配置的禁用时段
+    source "$CONFIG_FILE"
+    
+    # 提取禁用时段的小时部分（24小时制）
+    DISABLED_START_HOUR=$(echo $DISABLED_TIME | cut -d'-' -f1 | cut -d':' -f1)
+    DISABLED_END_HOUR=$(echo $DISABLED_TIME | cut -d'-' -f2 | cut -d':' -f1)
+
+    # 确保时间格式正确（24小时制）
+    if [[ ! "$DISABLED_START_HOUR" =~ ^[0-9]+$ ]] || [[ ! "$DISABLED_END_HOUR" =~ ^[0-9]+$ ]]; then
+        echo "时间格式错误：禁用时段必须为 HH:MM-HH:MM 格式（24小时制）"
+        exit 1
+    fi
+
+    # 获取当前小时（北京时间）
+    CURRENT_HOUR=$(TZ='Asia/Shanghai' date +'%H')
+
+    # 如果当前小时在禁用时段内，则返回 1（表示不执行）
+    if (( CURRENT_HOUR >= DISABLED_START_HOUR && CURRENT_HOUR < DISABLED_END_HOUR )); then
+        echo "当前时间在禁用时段内（$DISABLED_TIME），不执行更新。"
+        return 1
+    fi
+
+    # 如果不在禁用时段内，则返回 0（表示可以执行）
+    return 0
+}
+
 # 安装函数
 install_script() {
     echo "正在安装脚本..."
@@ -35,6 +63,9 @@ install_script() {
     read -p "请输入域名 (DOMAIN_NAME): " DOMAIN_NAME
     read -p "请输入 Telegram 机器人 Token (TG_BOT_TOKEN): " TG_BOT_TOKEN
     read -p "请输入 Telegram 聊天 ID (TG_CHAT_ID): " TG_CHAT_ID
+
+    # 手动输入禁用时段（例如：00:00-06:00）
+    read -p "请输入禁用时段（格式：HH:MM-HH:MM，如 00:00-06:00）: " DISABLED_TIME
 
     # 获取 DNS 记录 ID
     get_dns_record_id
@@ -47,6 +78,7 @@ install_script() {
     echo "DOMAIN_NAME='$DOMAIN_NAME'" >> "$CONFIG_FILE"
     echo "TG_BOT_TOKEN='$TG_BOT_TOKEN'" >> "$CONFIG_FILE"
     echo "TG_CHAT_ID='$TG_CHAT_ID'" >> "$CONFIG_FILE"
+    echo "DISABLED_TIME='$DISABLED_TIME'" >> "$CONFIG_FILE"
 
     # 将脚本复制到指定目录
     cp "$0" "$SCRIPT_PATH"
@@ -97,6 +129,11 @@ clear_ip_record() {
 
 # 手动运行更新
 run_update() {
+    # 检查是否在禁用时段内
+    if ! check_disabled_time; then
+        return  # 如果在禁用时段内，则不执行更新
+    fi
+
     source "$CONFIG_FILE"
 
     if [[ -z "$ZONE_ID" || -z "$DNS_RECORD_ID" || -z "$CF_API_TOKEN" || -z "$DOMAIN_NAME" || -z "$TG_BOT_TOKEN" || -z "$TG_CHAT_ID" ]]; then
@@ -105,7 +142,7 @@ run_update() {
     fi
 
     CURRENT_IP=$(curl -s 'https://ip.164746.xyz/ipTop.html' | cut -d',' -f1)
-    CURRENT_TIME=$(date "+%Y-%m-%d %H:%M:%S")
+    CURRENT_TIME=$(TZ='Asia/Shanghai' date "+%Y-%m-%d %H:%M:%S")
     IP_INFO=$(curl -s "http://ip-api.com/json/$CURRENT_IP?lang=zh-CN")
     COUNTRY=$(echo "$IP_INFO" | grep -oP '(?<="country":").*?(?=")')
     ISP=$(echo "$IP_INFO" | grep -oP '(?<="isp":").*?(?=")')
