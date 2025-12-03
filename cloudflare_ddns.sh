@@ -5,7 +5,39 @@ SCRIPT_FILE="/usr/local/bin/cf_ddds_run.sh"
 IP_FILE="/var/lib/cf_last_ip.txt"
 LOG_FILE="/var/log/cf_ddds.log"
 
-### ========================== 菜单 ==========================
+# ================== 系统检测和依赖安装 ==================
+install_dependencies(){
+    echo "🔧 检查依赖 curl 和 jq..."
+    if ! command -v curl >/dev/null 2>&1; then
+        echo "curl 未安装，尝试安装..."
+        if [[ -f /etc/debian_version ]]; then
+            sudo apt-get update && sudo apt-get install -y curl
+        elif [[ -f /etc/redhat-release ]]; then
+            sudo yum install -y curl
+        elif [[ -f /etc/alpine-release ]]; then
+            sudo apk add --no-cache curl
+        else
+            echo "请手动安装 curl"
+            exit 1
+        fi
+    fi
+
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "jq 未安装，尝试安装..."
+        if [[ -f /etc/debian_version ]]; then
+            sudo apt-get update && sudo apt-get install -y jq
+        elif [[ -f /etc/redhat-release ]]; then
+            sudo yum install -y jq
+        elif [[ -f /etc/alpine-release ]]; then
+            sudo apk add --no-cache jq
+        else
+            echo "请手动安装 jq"
+            exit 1
+        fi
+    fi
+}
+
+# ================== 菜单 ==================
 menu(){
     clear
     echo "======== Cloudflare DDNS 自动更新 ========"
@@ -29,8 +61,10 @@ menu(){
     esac
 }
 
-### ========================== 安装流程 ==========================
+# ================== 安装流程 ==================
 install(){
+    install_dependencies
+
     echo "🔑 输入 Cloudflare API Token:"
     read CF_API_TOKEN
     echo "🌍 输入 Zone ID:"
@@ -38,7 +72,7 @@ install(){
     echo "🔤 请输入解析域名 (如: ddns.example.com):"
     read DOMAIN_NAME
 
-    ### 自动获取 DNS Record ID
+    # 自动获取 DNS Record ID
     DNS_RECORD_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records?type=A&name=$DOMAIN_NAME" \
         -H "Authorization: Bearer $CF_API_TOKEN" \
         -H "Content-Type: application/json" | jq -r '.result[0].id')
@@ -52,7 +86,7 @@ install(){
 
     echo "📨 是否启用 Telegram 通知? (y/n)"
     read TG_CHOICE
-    if [[ $TG_CHOICE == y ]];then
+    if [[ $TG_CHOICE == y ]]; then
         read -p "Bot Token: " TG_BOT_TOKEN
         read -p "Chat ID: " TG_CHAT_ID
     else
@@ -62,7 +96,7 @@ install(){
 
     mkdir -p /var/lib
 
-    ### 保存配置
+    # 保存配置
     cat > $CONFIG_FILE <<EOF
 CF_API_TOKEN="$CF_API_TOKEN"
 ZONE_ID="$ZONE_ID"
@@ -72,7 +106,7 @@ TG_BOT_TOKEN="$TG_BOT_TOKEN"
 TG_CHAT_ID="$TG_CHAT_ID"
 EOF
 
-    ### ========================== 主运行脚本 ==========================
+    # 创建主脚本
     cat > $SCRIPT_FILE <<'EOF'
 #!/bin/bash
 source /etc/cf_ddds.conf
@@ -88,11 +122,9 @@ ISP=$(echo "$IP_INFO" | grep -oP '(?<="isp":").*?(?=")')
 IP_FILE="/var/lib/cf_last_ip.txt"
 LOG_FILE="/var/log/cf_ddds.log"
 
-# 如果文件不存在则保存当前 IP
 [[ ! -f "$IP_FILE" ]] && echo "$CURRENT_IP" > $IP_FILE
 LAST_IP=$(cat $IP_FILE)
 
-# 判断是否需要更新
 if [[ "$CURRENT_IP" != "$LAST_IP" || "$FORCE_UPDATE" == "force" ]]; then
     RESPONSE=$(curl -s -X PATCH "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records/$DNS_RECORD_ID" \
         -H "Authorization: Bearer $CF_API_TOKEN" \
@@ -102,16 +134,13 @@ if [[ "$CURRENT_IP" != "$LAST_IP" || "$FORCE_UPDATE" == "force" ]]; then
     if echo "$RESPONSE" | grep -q '"success":true'; then
         echo "$CURRENT_IP" > $IP_FILE
 
-        # 判断是否在禁止通知时间段内 (北京时间 0-6 点)
+        # 夜间不发通知
         HOUR=$(TZ="Asia/Shanghai" date +%H)
-        NO_NOTIFY_START=0
-        NO_NOTIFY_END=6
         SEND_TG=true
-        if (( HOUR >= NO_NOTIFY_START && HOUR < NO_NOTIFY_END )); then
+        if (( HOUR >= 0 && HOUR < 6 )); then
             SEND_TG=false
         fi
 
-        # Telegram 通知
         if [[ -n "$TG_BOT_TOKEN" && -n "$TG_CHAT_ID" && "$SEND_TG" == true ]]; then
 MSG="
 ✨ *Cloudflare DNS 自动更新通知*
@@ -155,21 +184,27 @@ EOF
 
     chmod +x $SCRIPT_FILE
 
-    ### ========================== 定时任务 ==========================
-    if crontab -l 2>/dev/null | grep -q "$SCRIPT_FILE"; then
-        echo "⏰ 定时任务已存在，无需重复添加！"
+    # 添加定时任务
+    if command -v crontab >/dev/null 2>&1; then
+        if crontab -l 2>/dev/null | grep -q "$SCRIPT_FILE"; then
+            echo "⏰ 定时任务已存在，无需重复添加！"
+        else
+            (crontab -l 2>/dev/null; echo "0 * * * * $SCRIPT_FILE") | crontab -
+            echo "⏰ 已创建定时任务（每小时执行一次）"
+        fi
     else
-        (crontab -l 2>/dev/null; echo "0 * * * * $SCRIPT_FILE") | crontab -
-        echo "⏰ 已创建定时任务（每小时执行一次）"
+        echo "⚠️ crontab 未找到，请手动设置定时任务"
     fi
 
     echo "✨ 安装完成 → DDNS 已启动！"
 }
 
-### ========================== 卸载 ==========================
+# ================== 卸载 ==================
 uninstall(){
     rm -f $CONFIG_FILE $SCRIPT_FILE $IP_FILE
-    crontab -l | grep -v "cf_ddds_run.sh" | crontab -
+    if command -v crontab >/dev/null 2>&1; then
+        crontab -l | grep -v "cf_ddds_run.sh" | crontab -
+    fi
     echo "🗑️ 已卸载并清理所有配置。"
 }
 
