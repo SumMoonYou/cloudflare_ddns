@@ -8,33 +8,21 @@ LOG_FILE="/var/log/cf_ddds.log"
 # ================== 系统检测和依赖安装 ==================
 install_dependencies(){
     echo "🔧 检查依赖 curl 和 jq..."
-    if ! command -v curl >/dev/null 2>&1; then
-        echo "curl 未安装，尝试安装..."
-        if [[ -f /etc/debian_version ]]; then
-            sudo apt-get update && sudo apt-get install -y curl
-        elif [[ -f /etc/redhat-release ]]; then
-            sudo yum install -y curl
-        elif [[ -f /etc/alpine-release ]]; then
-            sudo apk add --no-cache curl
-        else
-            echo "请手动安装 curl"
-            exit 1
+    for cmd in curl jq; do
+        if ! command -v $cmd >/dev/null 2>&1; then
+            echo "$cmd 未安装，尝试安装..."
+            if [[ -f /etc/debian_version ]]; then
+                sudo apt-get update && sudo apt-get install -y $cmd
+            elif [[ -f /etc/redhat-release ]]; then
+                sudo yum install -y $cmd
+            elif [[ -f /etc/alpine-release ]]; then
+                sudo apk add --no-cache $cmd
+            else
+                echo "请手动安装 $cmd"
+                exit 1
+            fi
         fi
-    fi
-
-    if ! command -v jq >/dev/null 2>&1; then
-        echo "jq 未安装，尝试安装..."
-        if [[ -f /etc/debian_version ]]; then
-            sudo apt-get update && sudo apt-get install -y jq
-        elif [[ -f /etc/redhat-release ]]; then
-            sudo yum install -y jq
-        elif [[ -f /etc/alpine-release ]]; then
-            sudo apk add --no-cache jq
-        else
-            echo "请手动安装 jq"
-            exit 1
-        fi
-    fi
+    done
 }
 
 # ================== 菜单 ==================
@@ -65,6 +53,14 @@ menu(){
 install(){
     install_dependencies
 
+    # 检查文件目录是否存在
+    [[ ! -d "/var/lib" ]] && mkdir -p /var/lib
+    [[ ! -d "/var/log" ]] && mkdir -p /var/log
+
+    [[ ! -f "$CONFIG_FILE" ]] && touch $CONFIG_FILE
+    [[ ! -f "$IP_FILE" ]] && touch $IP_FILE
+    [[ ! -f "$LOG_FILE" ]] && touch $LOG_FILE
+
     echo "🔑 输入 Cloudflare API Token:"
     read CF_API_TOKEN
     echo "🌍 输入 Zone ID:"
@@ -94,8 +90,6 @@ install(){
         TG_CHAT_ID=""
     fi
 
-    mkdir -p /var/lib
-
     # 保存配置
     cat > $CONFIG_FILE <<EOF
 CF_API_TOKEN="$CF_API_TOKEN"
@@ -106,7 +100,7 @@ TG_BOT_TOKEN="$TG_BOT_TOKEN"
 TG_CHAT_ID="$TG_CHAT_ID"
 EOF
 
-    # 创建主脚本
+    # 创建主运行脚本
     cat > $SCRIPT_FILE <<'EOF'
 #!/bin/bash
 source /etc/cf_ddds.conf
@@ -123,6 +117,8 @@ IP_FILE="/var/lib/cf_last_ip.txt"
 LOG_FILE="/var/log/cf_ddds.log"
 
 [[ ! -f "$IP_FILE" ]] && echo "$CURRENT_IP" > $IP_FILE
+[[ ! -f "$LOG_FILE" ]] && touch $LOG_FILE
+
 LAST_IP=$(cat $IP_FILE)
 
 if [[ "$CURRENT_IP" != "$LAST_IP" || "$FORCE_UPDATE" == "force" ]]; then
@@ -201,11 +197,13 @@ EOF
 
 # ================== 卸载 ==================
 uninstall(){
-    rm -f $CONFIG_FILE $SCRIPT_FILE $IP_FILE
+    # 删除所有生成文件
+    rm -f $CONFIG_FILE $SCRIPT_FILE $IP_FILE $LOG_FILE
+    # 删除定时任务
     if command -v crontab >/dev/null 2>&1; then
         crontab -l | grep -v "cf_ddds_run.sh" | crontab -
     fi
-    echo "🗑️ 已卸载并清理所有配置。"
+    echo "🗑️ 已卸载并清理所有生成文件和定时任务。"
 }
 
 menu
