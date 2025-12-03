@@ -77,36 +77,22 @@ uninstall_script() {
         echo "配置文件不存在：$CONFIG_FILE"
     fi
 
-    # 删除 IP 记录文件
-    if [[ -f "$LAST_IP_FILE" ]]; then
-        rm -f "$LAST_IP_FILE"
-        echo "IP 记录文件已删除：$LAST_IP_FILE"
-    else
-        echo "IP 记录文件不存在：$LAST_IP_FILE"
-    fi
-
     echo "卸载完成。"
 }
 
-# 删除配置和记录文件
-delete_files() {
-    echo "正在删除配置和记录文件..."
+# 清空IP记录文件
+clear_ip_record() {
+    echo "正在清空 IP 记录文件..."
 
-    if [[ -f "$CONFIG_FILE" ]]; then
-        rm -f "$CONFIG_FILE"
-        echo "配置文件已删除：$CONFIG_FILE"
-    else
-        echo "配置文件不存在：$CONFIG_FILE"
-    fi
-
+    # 检查 IP 记录文件是否存在
     if [[ -f "$LAST_IP_FILE" ]]; then
-        rm -f "$LAST_IP_FILE"
-        echo "IP 记录文件已删除：$LAST_IP_FILE"
+        > "$LAST_IP_FILE"  # 清空文件内容
+        echo "IP 记录文件已清空：$LAST_IP_FILE"
     else
         echo "IP 记录文件不存在：$LAST_IP_FILE"
     fi
 
-    echo "所有文件已删除。"
+    echo "IP 记录文件已清空。"
 }
 
 # 手动运行更新
@@ -180,7 +166,7 @@ menu() {
     echo "请选择操作:"
     echo "1. 安装脚本"
     echo "2. 卸载脚本"
-    echo "3. 删除配置和记录文件"
+    echo "3. 清空 IP 记录文件"
     echo "4. 手动运行更新"
     echo "5. 退出"
     echo "===================================="
@@ -194,7 +180,7 @@ menu() {
             uninstall_script
             ;;
         3)
-            delete_files
+            clear_ip_record
             ;;
         4)
             run_update
