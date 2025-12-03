@@ -5,6 +5,26 @@ CONFIG_FILE="/etc/cf_ddds.conf"
 LAST_IP_FILE="/var/lib/cf_last_ip.txt"
 LOG_FILE="/var/log/cf_ddds.log"
 SCRIPT_PATH="/usr/local/bin/cf_ddds_update.sh"
+CRON_JOB="0 * * * * $SCRIPT_PATH"
+
+# 安装 jq 的函数
+install_jq() {
+    if ! command -v jq &> /dev/null; then
+        echo "未检测到 jq，正在安装 jq..."
+        
+        # 安装 jq
+        if [[ -x "$(command -v apt-get)" ]]; then
+            sudo apt-get update && sudo apt-get install -y jq
+        elif [[ -x "$(command -v yum)" ]]; then
+            sudo yum install -y jq
+        else
+            echo "无法自动安装 jq。请手动安装 jq 后重试。" >&2
+            exit 1
+        fi
+    else
+        echo "jq 已安装，继续执行..."
+    fi
+}
 
 # 获取 DNS 记录 ID 的函数
 get_dns_record_id() {
@@ -86,6 +106,9 @@ install_script() {
     # 赋予执行权限
     chmod +x "$SCRIPT_PATH"
 
+    # 添加定时任务（如果没有添加过）
+    (crontab -l 2>/dev/null | grep -q -F "$CRON_JOB") || (crontab -l 2>/dev/null; echo "$CRON_JOB") | crontab -
+
     echo "脚本已安装并可通过 $SCRIPT_PATH 手动运行。"
 }
 
@@ -109,22 +132,11 @@ uninstall_script() {
         echo "配置文件不存在：$CONFIG_FILE"
     fi
 
+    # 删除定时任务
+    crontab -l | grep -v "$SCRIPT_PATH" | crontab -
+    echo "定时任务已删除。"
+
     echo "卸载完成。"
-}
-
-# 清空IP记录文件
-clear_ip_record() {
-    echo "正在清空 IP 记录文件..."
-
-    # 检查 IP 记录文件是否存在
-    if [[ -f "$LAST_IP_FILE" ]]; then
-        > "$LAST_IP_FILE"  # 清空文件内容
-        echo "IP 记录文件已清空：$LAST_IP_FILE"
-    else
-        echo "IP 记录文件不存在：$LAST_IP_FILE"
-    fi
-
-    echo "IP 记录文件已清空。"
 }
 
 # 手动运行更新
@@ -143,26 +155,25 @@ run_update() {
 
     CURRENT_IP=$(curl -s 'https://ip.164746.xyz/ipTop.html' | cut -d',' -f1)
     CURRENT_TIME=$(TZ='Asia/Shanghai' date "+%Y-%m-%d %H:%M:%S")
+    
+    # 获取 IP 信息（通过 IP-API 获取地理位置信息）
     IP_INFO=$(curl -s "http://ip-api.com/json/$CURRENT_IP?lang=zh-CN")
-    COUNTRY=$(echo "$IP_INFO" | grep -oP '(?<="country":").*?(?=")')
-    ISP=$(echo "$IP_INFO" | grep -oP '(?<="isp":").*?(?=")')
+    COUNTRY=$(echo "$IP_INFO" | jq -r '.country')
+    CITY=$(echo "$IP_INFO" | jq -r '.city')
+    ISP=$(echo "$IP_INFO" | jq -r '.isp')
 
-    # 如果文件不存在则保存当前 IP
-    [[ ! -f "$LAST_IP_FILE" ]] && echo "$CURRENT_IP" > "$LAST_IP_FILE"
-    LAST_IP=$(cat "$LAST_IP_FILE")
+    # 更新 Cloudflare 记录
+    RESPONSE=$(curl -s -X PATCH "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records/$DNS_RECORD_ID" \
+        -H "Authorization: Bearer $CF_API_TOKEN" \
+        -H "Content-Type: application/json" \
+        --data "{\"type\":\"A\",\"name\":\"$DOMAIN_NAME\",\"content\":\"$CURRENT_IP\",\"ttl\":1,\"proxied\":false}")
 
-    # 如果 IP 发生变化，则更新 Cloudflare 记录
-    if [[ "$CURRENT_IP" != "$LAST_IP" ]]; then
-        RESPONSE=$(curl -s -X PATCH "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records/$DNS_RECORD_ID" \
-            -H "Authorization: Bearer $CF_API_TOKEN" \
-            -H "Content-Type: application/json" \
-            --data "{\"type\":\"A\",\"name\":\"$DOMAIN_NAME\",\"content\":\"$CURRENT_IP\",\"ttl\":1,\"proxied\":false}")
+    if echo "$RESPONSE" | grep -q '"success":true'; then
+        # 无论 IP 是否变化，都更新记录并发送通知
+        echo "$CURRENT_IP" > "$LAST_IP_FILE"
 
-        if echo "$RESPONSE" | grep -q '"success":true'; then
-            echo "$CURRENT_IP" > "$LAST_IP_FILE"
-
-            ### ============== Telegram 通知（精美版） ==============
-            MSG="
+        ### ============== Telegram 通知（精美版） ==============
+        MSG="
 ✨ *Cloudflare DNS 自动更新通知*
 
 📌 *域名：*
@@ -173,6 +184,7 @@ run_update() {
 
 🌏 *IP 信息：*
 • *国家地区：* $COUNTRY  
+• *城市：* $CITY  
 • *运营商：* $ISP  
 
 ⏰ *更新时间：*
@@ -185,29 +197,27 @@ run_update() {
 ———————————————
 🎉 *更新成功！DNS 已同步完成。*
 "
-            curl -s -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
-                -d "chat_id=$TG_CHAT_ID&parse_mode=Markdown&text=$MSG"
 
-            echo "[] 已更新 → $CURRENT_IP ($COUNTRY / $ISP)" >> "$LOG_FILE"
-        else
-            echo "[] Cloudflare 更新失败" >> "$LOG_FILE"
-        fi
+        # 发送 Telegram 消息
+        curl -s -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
+            -d "chat_id=$TG_CHAT_ID&parse_mode=Markdown&text=$MSG"
+
+        echo "[] 已更新 → $CURRENT_IP ($COUNTRY / $ISP)" >> "$LOG_FILE"
     else
-        echo "[] IP 未变化 → $CURRENT_IP" >> "$LOG_FILE"
+        echo "[] Cloudflare 更新失败" >> "$LOG_FILE"
     fi
 }
 
 # 显示菜单
 menu() {
     echo "===================================="
-    echo "请选择操作:"
+    echo "请选择操作"
     echo "1. 安装脚本"
     echo "2. 卸载脚本"
-    echo "3. 清空 IP 记录文件"
-    echo "4. 手动运行更新"
-    echo "5. 退出"
+    echo "3. 手动运行更新"
+    echo "4. 退出"
     echo "===================================="
-    read -p "请输入选项 (1-5): " choice
+    read -p "请输入选项 (1-4): " choice
 
     case "$choice" in
         1)
@@ -217,12 +227,9 @@ menu() {
             uninstall_script
             ;;
         3)
-            clear_ip_record
-            ;;
-        4)
             run_update
             ;;
-        5)
+        4)
             exit 0
             ;;
         *)
@@ -231,6 +238,9 @@ menu() {
             ;;
     esac
 }
+
+# 安装 jq（如果未安装）
+install_jq
 
 # 启动菜单
 menu
