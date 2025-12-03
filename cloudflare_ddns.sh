@@ -53,7 +53,6 @@ menu(){
 install(){
     install_dependencies
 
-    # 检查文件目录是否存在
     [[ ! -d "/var/lib" ]] && mkdir -p /var/lib
     [[ ! -d "/var/log" ]] && mkdir -p /var/log
 
@@ -123,7 +122,7 @@ LAST_IP=$(cat $IP_FILE)
 
 if [[ "$CURRENT_IP" != "$LAST_IP" || "$FORCE_UPDATE" == "force" ]]; then
 
-    # ==== Cloudflare 更新 try-catch ====
+    # ==== Cloudflare 更新 ====
     {
         RESPONSE=$(curl -s -X PATCH "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records/$DNS_RECORD_ID" \
             -H "Authorization: Bearer $CF_API_TOKEN" \
@@ -137,11 +136,9 @@ if [[ "$CURRENT_IP" != "$LAST_IP" || "$FORCE_UPDATE" == "force" ]]; then
         else
             echo "[$CURRENT_TIME] Cloudflare DNS 更新失败" >> $LOG_FILE
         fi
-    } || {
-        echo "[$CURRENT_TIME] Cloudflare 更新异常" >> $LOG_FILE
     }
 
-    # ==== Telegram 通知 try-catch ====
+    # ==== Telegram 通知 ====
     {
         HOUR=$(TZ="Asia/Shanghai" date +%H)
         SEND_TG=true
@@ -150,34 +147,27 @@ if [[ "$CURRENT_IP" != "$LAST_IP" || "$FORCE_UPDATE" == "force" ]]; then
         fi
 
         if [[ -n "$TG_BOT_TOKEN" && -n "$TG_CHAT_ID" && "$SEND_TG" == true ]]; then
-MSG="
-✨ *Cloudflare DNS 自动更新通知*
 
-📌 *域名：*
-\`$DOMAIN_NAME\`
+MSG="Cloudflare DNS 自动更新通知
 
-🆕 *新 IP：*
-\`$CURRENT_IP\`
+域名: $DOMAIN_NAME
+新 IP: $CURRENT_IP
 
-🌏 *IP 信息：*
-• *国家地区：* $COUNTRY  
-• *运营商：* $ISP  
+IP 信息:
+- 国家地区: $COUNTRY
+- 运营商: $ISP
 
-⏰ *更新时间：*
-\`$CURRENT_TIME\`
+更新时间: $CURRENT_TIME
 
-🔍 *IP 查询：*
-• https://ip.sb/ip/$CURRENT_IP
-• http://ip-api.com/json/$CURRENT_IP
-
-———————————————
-🎉 *更新完成*
+IP 查询:
+- https://ip.sb/ip/$CURRENT_IP
+- http://ip-api.com/json/$CURRENT_IP
 "
+
             curl -s -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
-                -d "chat_id=$TG_CHAT_ID&parse_mode=Markdown&text=$MSG"
+                -d "chat_id=$TG_CHAT_ID" \
+                --data-urlencode "text=$MSG"
         fi
-    } || {
-        echo "[$CURRENT_TIME] Telegram 发送异常" >> $LOG_FILE
     }
 
 else
