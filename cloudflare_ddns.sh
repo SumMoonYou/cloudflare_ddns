@@ -148,25 +148,30 @@ if [[ "$CURRENT_IP" != "$LAST_IP" || "$FORCE_UPDATE" == "force" ]]; then
 
         if [[ -n "$TG_BOT_TOKEN" && -n "$TG_CHAT_ID" && "$SEND_TG" == true ]]; then
 
-MSG="Cloudflare DNS 自动更新通知
+# Telegram MarkdownV2 美化消息
+MSG="*✨ Cloudflare DNS 自动更新通知 ✨*
 
-域名: $DOMAIN_NAME
-新 IP: $CURRENT_IP
+*📌 域名:* \`$DOMAIN_NAME\`
+*🆕 新 IP:* \`$CURRENT_IP\`
 
-IP 信息:
-- 国家地区: $COUNTRY
-- 运营商: $ISP
+*🌏 IP 信息:*
+• 国家地区: _${COUNTRY}_
+• 运营商: _${ISP}_
 
-更新时间: $CURRENT_TIME
+*⏰ 更新时间:* \`$CURRENT_TIME\`
 
-IP 查询:
-- https://ip.sb/ip/$CURRENT_IP
-- http://ip-api.com/json/$CURRENT_IP
+*🔍 IP 查询:*
+• [IP.sb](https://ip.sb/ip/$CURRENT_IP)
+• [ip-api.com](http://ip-api.com/json/$CURRENT_IP)
+
+———————————————
+🎉 更新完成
 "
 
             curl -s -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
                 -d "chat_id=$TG_CHAT_ID" \
-                --data-urlencode "text=$MSG"
+                --data-urlencode "text=$MSG" \
+                -d "parse_mode=MarkdownV2"
         fi
     }
 
