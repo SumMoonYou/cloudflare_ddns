@@ -144,19 +144,6 @@ LOG_FILE="/var/log/cf_ddds.log"
 
 LAST_IP=$(cat $IP_FILE)
 
-# ================== MarkdownV2 完整转义 ==================
-escape_md2() {
-    local text="$1"
-    # Telegram MarkdownV2 所有保留字符都转义
-    echo "$text" | sed -E 's/([_\*\[\]\(\)\~\`\>\#\+\-\=\|\{\}\.\!])/\\\1/g'
-}
-
-DOMAIN_ESCAPED=$(escape_md2 "$DOMAIN_NAME")
-IP_ESCAPED=$(escape_md2 "$CURRENT_IP")
-COUNTRY_ESCAPED=$(escape_md2 "$COUNTRY")
-ISP_ESCAPED=$(escape_md2 "$ISP")
-CURRENT_TIME_ESCAPED=$(escape_md2 "$CURRENT_TIME")
-
 if [[ "$CURRENT_IP" != "$LAST_IP" || "$FORCE_UPDATE" == "force" ]]; then
 
     # ==== Cloudflare 更新 ====
@@ -174,7 +161,7 @@ if [[ "$CURRENT_IP" != "$LAST_IP" || "$FORCE_UPDATE" == "force" ]]; then
         fi
     }
 
-    # ==== Telegram 消息（夜间静默 0-6 点） ====
+    # ==== Telegram 消息（HTML 模式） ====
     {
         HOUR=$(TZ="Asia/Shanghai" date +%H)
         SEND_TG=true
@@ -184,20 +171,20 @@ if [[ "$CURRENT_IP" != "$LAST_IP" || "$FORCE_UPDATE" == "force" ]]; then
 
         if [[ -n "$TG_BOT_TOKEN" && -n "$TG_CHAT_ID" && "$SEND_TG" == true ]]; then
 
-MSG="*✨ Cloudflare DNS 自动更新通知 ✨*
+MSG="<b>✨ Cloudflare DNS 自动更新通知 ✨</b>
 
-*📌 域名:* \`$DOMAIN_ESCAPED\`
-*🆕 新 IP:* \`$IP_ESCAPED\`
+<b>📌 域名:</b> <code>$DOMAIN_NAME</code>
+<b>🆕 新 IP:</b> <code>$CURRENT_IP</code>
 
-*🌏 IP 信息:*
-• 国家地区: _$COUNTRY_ESCAPED_
-• 运营商: _$ISP_ESCAPED_
+<b>🌏 IP 信息:</b>
+• 国家地区: $COUNTRY
+• 运营商: $ISP
 
-*⏰ 更新时间:* \`$CURRENT_TIME_ESCAPED\`
+<b>⏰ 更新时间:</b> <code>$CURRENT_TIME</code>
 
-*🔍 IP 查询:*
-• [IP.sb](https://ip.sb/ip/$CURRENT_IP)
-• [ip-api.com](http://ip-api.com/json/$CURRENT_IP)
+<b>🔍 IP 查询:</b>
+• <a href='https://ip.sb/ip/$CURRENT_IP'>IP.sb</a>
+• <a href='http://ip-api.com/json/$CURRENT_IP'>ip-api.com</a>
 
 ———————————————
 🎉 更新完成
@@ -206,7 +193,7 @@ MSG="*✨ Cloudflare DNS 自动更新通知 ✨*
             curl -s -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
                 -d "chat_id=$TG_CHAT_ID" \
                 --data-urlencode "text=$MSG" \
-                -d "parse_mode=MarkdownV2"
+                -d "parse_mode=HTML"
         fi
     }
 
