@@ -88,6 +88,27 @@ uninstall_script() {
     echo "卸载完成。"
 }
 
+# 删除配置和记录文件
+delete_files() {
+    echo "正在删除配置和记录文件..."
+
+    if [[ -f "$CONFIG_FILE" ]]; then
+        rm -f "$CONFIG_FILE"
+        echo "配置文件已删除：$CONFIG_FILE"
+    else
+        echo "配置文件不存在：$CONFIG_FILE"
+    fi
+
+    if [[ -f "$LAST_IP_FILE" ]]; then
+        rm -f "$LAST_IP_FILE"
+        echo "IP 记录文件已删除：$LAST_IP_FILE"
+    else
+        echo "IP 记录文件不存在：$LAST_IP_FILE"
+    fi
+
+    echo "所有文件已删除。"
+}
+
 # 手动运行更新
 run_update() {
     source "$CONFIG_FILE"
@@ -153,19 +174,40 @@ run_update() {
     fi
 }
 
-# 脚本操作选项
-case "$1" in
-    install)
-        install_script
-        ;;
-    uninstall)
-        uninstall_script
-        ;;
-    update)
-        run_update
-        ;;
-    *)
-        echo "用法：$0 {install|uninstall|update}"
-        exit 1
-        ;;
-esac
+# 显示菜单
+menu() {
+    echo "===================================="
+    echo "请选择操作:"
+    echo "1. 安装脚本"
+    echo "2. 卸载脚本"
+    echo "3. 删除配置和记录文件"
+    echo "4. 手动运行更新"
+    echo "5. 退出"
+    echo "===================================="
+    read -p "请输入选项 (1-5): " choice
+
+    case "$choice" in
+        1)
+            install_script
+            ;;
+        2)
+            uninstall_script
+            ;;
+        3)
+            delete_files
+            ;;
+        4)
+            run_update
+            ;;
+        5)
+            exit 0
+            ;;
+        *)
+            echo "无效选项，请重新选择。"
+            menu
+            ;;
+    esac
+}
+
+# 启动菜单
+menu
