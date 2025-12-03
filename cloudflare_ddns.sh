@@ -122,15 +122,27 @@ LOG_FILE="/var/log/cf_ddds.log"
 LAST_IP=$(cat $IP_FILE)
 
 if [[ "$CURRENT_IP" != "$LAST_IP" || "$FORCE_UPDATE" == "force" ]]; then
-    RESPONSE=$(curl -s -X PATCH "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records/$DNS_RECORD_ID" \
-        -H "Authorization: Bearer $CF_API_TOKEN" \
-        -H "Content-Type: application/json" \
-        --data "{\"type\":\"A\",\"name\":\"$DOMAIN_NAME\",\"content\":\"$CURRENT_IP\",\"ttl\":1,\"proxied\":false}")
 
-    if echo "$RESPONSE" | grep -q '"success":true'; then
-        echo "$CURRENT_IP" > $IP_FILE
+    # ==== Cloudflare 更新 try-catch ====
+    {
+        RESPONSE=$(curl -s -X PATCH "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records/$DNS_RECORD_ID" \
+            -H "Authorization: Bearer $CF_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data "{\"type\":\"A\",\"name\":\"$DOMAIN_NAME\",\"content\":\"$CURRENT_IP\",\"ttl\":1,\"proxied\":false}")
+        
+        if echo "$RESPONSE" | grep -q '"success":true'; then
+            echo "$CURRENT_IP" > $IP_FILE
+            UPDATE_SUCCESS=true
+            echo "[$CURRENT_TIME] Cloudflare DNS 更新成功 → $CURRENT_IP" >> $LOG_FILE
+        else
+            echo "[$CURRENT_TIME] Cloudflare DNS 更新失败" >> $LOG_FILE
+        fi
+    } || {
+        echo "[$CURRENT_TIME] Cloudflare 更新异常" >> $LOG_FILE
+    }
 
-        # 夜间不发通知
+    # ==== Telegram 通知 try-catch ====
+    {
         HOUR=$(TZ="Asia/Shanghai" date +%H)
         SEND_TG=true
         if (( HOUR >= 0 && HOUR < 6 )); then
@@ -159,20 +171,15 @@ MSG="
 • http://ip-api.com/json/$CURRENT_IP
 
 ———————————————
-🎉 *更新成功！DNS 已同步完成。*
+🎉 *更新完成*
 "
             curl -s -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
                 -d "chat_id=$TG_CHAT_ID&parse_mode=Markdown&text=$MSG"
         fi
+    } || {
+        echo "[$CURRENT_TIME] Telegram 发送异常" >> $LOG_FILE
+    }
 
-        if [[ "$FORCE_UPDATE" == "force" ]]; then
-            echo "[$CURRENT_TIME] 强制更新 → $CURRENT_IP ($COUNTRY / $ISP)" >> $LOG_FILE
-        else
-            echo "[$CURRENT_TIME] 已更新 → $CURRENT_IP ($COUNTRY / $ISP)" >> $LOG_FILE
-        fi
-    else
-        echo "[$CURRENT_TIME] Cloudflare 更新失败" >> $LOG_FILE
-    fi
 else
     echo "[$CURRENT_TIME] IP 未变化 → $CURRENT_IP" >> $LOG_FILE
 fi
@@ -197,9 +204,7 @@ EOF
 
 # ================== 卸载 ==================
 uninstall(){
-    # 删除所有生成文件
     rm -f $CONFIG_FILE $SCRIPT_FILE $IP_FILE $LOG_FILE
-    # 删除定时任务
     if command -v crontab >/dev/null 2>&1; then
         crontab -l | grep -v "cf_ddds_run.sh" | crontab -
     fi
