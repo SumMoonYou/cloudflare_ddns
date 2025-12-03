@@ -147,9 +147,11 @@ LOG_FILE="/var/log/cf_ddds.log"
 
 LAST_IP=$(cat $IP_FILE)
 
-# 函数：MarkdownV2 转义
+# ================== MarkdownV2 转义函数 ==================
 escape_md2() {
-  echo "$1" | sed -E 's/([\_\*\[\]\(\)\~\`\>\#\+\-\=\|\{\}\.\!])/\\\1/g'
+    local text="$1"
+    # Telegram MarkdownV2 所有保留字符转义
+    echo "$text" | sed -E 's/([_\*\[\]\(\)\~\`\>\#\+\-\=\|\{\}\.\!])/\\\1/g'
 }
 
 DOMAIN_ESCAPED=$(escape_md2 "$DOMAIN_NAME")
