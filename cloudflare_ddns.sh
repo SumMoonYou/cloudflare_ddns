@@ -5,7 +5,7 @@ SCRIPT_FILE="/usr/local/bin/cf_ddds_run.sh"
 IP_FILE="/var/lib/cf_last_ip.txt"
 LOG_FILE="/var/log/cf_ddds.log"
 
-# ================== 系统检测和依赖安装 ==================
+# ================== 系统依赖检查 ==================
 install_dependencies(){
     echo "🔧 检查依赖 curl 和 jq..."
     for cmd in curl jq; do
@@ -132,9 +132,18 @@ FORCE_UPDATE=$1
 
 CURRENT_IP=$(curl -s 'https://ip.164746.xyz/ipTop.html' | cut -d',' -f1)
 CURRENT_TIME=$(date "+%Y-%m-%d %H:%M:%S")
+
 IP_INFO=$(curl -s "http://ip-api.com/json/$CURRENT_IP?lang=zh-CN")
-COUNTRY=$(echo "$IP_INFO" | grep -oP '(?<="country":").*?(?=")')
-ISP=$(echo "$IP_INFO" | grep -oP '(?<="isp":").*?(?=")')
+COUNTRY=$(echo "$IP_INFO" | jq -r '.country')
+REGION=$(echo "$IP_INFO" | jq -r '.regionName')
+CITY=$(echo "$IP_INFO" | jq -r '.city')
+ZIP=$(echo "$IP_INFO" | jq -r '.zip')
+LAT=$(echo "$IP_INFO" | jq -r '.lat')
+LON=$(echo "$IP_INFO" | jq -r '.lon')
+TIMEZONE=$(echo "$IP_INFO" | jq -r '.timezone')
+ISP=$(echo "$IP_INFO" | jq -r '.isp')
+ORG=$(echo "$IP_INFO" | jq -r '.org')
+ASN=$(echo "$IP_INFO" | jq -r '.as')
 
 IP_FILE="/var/lib/cf_last_ip.txt"
 LOG_FILE="/var/log/cf_ddds.log"
@@ -178,7 +187,14 @@ MSG="<b>✨ Cloudflare DNS 自动更新通知 ✨</b>
 
 <b>🌏 IP 信息:</b>
 • 国家地区: $COUNTRY
-• 运营商: $ISP
+• 省/州: $REGION
+• 城市: $CITY
+• 邮编: $ZIP
+• 时区: $TIMEZONE
+• 经纬度: $LAT, $LON
+• ISP: $ISP
+• 组织: $ORG
+• ASN: $ASN
 
 <b>⏰ 更新时间:</b> <code>$CURRENT_TIME</code>
 
