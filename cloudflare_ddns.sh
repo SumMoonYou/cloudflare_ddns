@@ -120,6 +120,17 @@ LOG_FILE="/var/log/cf_ddds.log"
 
 LAST_IP=$(cat $IP_FILE)
 
+# 函数：MarkdownV2 转义
+escape_md2() {
+  echo "$1" | sed -E 's/([\_\*\[\]\(\)\~\`\>\#\+\-\=\|\{\}\.\!])/\\\1/g'
+}
+
+DOMAIN_ESCAPED=$(escape_md2 "$DOMAIN_NAME")
+IP_ESCAPED=$(escape_md2 "$CURRENT_IP")
+COUNTRY_ESCAPED=$(escape_md2 "$COUNTRY")
+ISP_ESCAPED=$(escape_md2 "$ISP")
+CURRENT_TIME_ESCAPED=$(escape_md2 "$CURRENT_TIME")
+
 if [[ "$CURRENT_IP" != "$LAST_IP" || "$FORCE_UPDATE" == "force" ]]; then
 
     # ==== Cloudflare 更新 ====
@@ -148,17 +159,16 @@ if [[ "$CURRENT_IP" != "$LAST_IP" || "$FORCE_UPDATE" == "force" ]]; then
 
         if [[ -n "$TG_BOT_TOKEN" && -n "$TG_CHAT_ID" && "$SEND_TG" == true ]]; then
 
-# Telegram MarkdownV2 美化消息
 MSG="*✨ Cloudflare DNS 自动更新通知 ✨*
 
-*📌 域名:* \`$DOMAIN_NAME\`
-*🆕 新 IP:* \`$CURRENT_IP\`
+*📌 域名:* \`$DOMAIN_ESCAPED\`
+*🆕 新 IP:* \`$IP_ESCAPED\`
 
 *🌏 IP 信息:*
-• 国家地区: _${COUNTRY}_
-• 运营商: _${ISP}_
+• 国家地区: _$COUNTRY_ESCAPED_
+• 运营商: _$ISP_ESCAPED_
 
-*⏰ 更新时间:* \`$CURRENT_TIME\`
+*⏰ 更新时间:* \`$CURRENT_TIME_ESCAPED\`
 
 *🔍 IP 查询:*
 • [IP.sb](https://ip.sb/ip/$CURRENT_IP)
