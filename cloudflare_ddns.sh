@@ -1,12 +1,11 @@
 #!/bin/bash
 
-# 配置文件路径和脚本路径
 CONFIG_FILE="/etc/cf_ddds.conf"
 SCRIPT_FILE="/usr/local/bin/cf_ddds_run.sh"
 IP_FILE="/var/lib/cf_last_ip.txt"
 LOG_FILE="/var/log/cf_ddds.log"
 
-# 创建菜单
+### ========================== 菜单 ==========================
 menu(){
 clear
 echo "======== Cloudflare DDNS 自动更新 ========"
@@ -28,27 +27,36 @@ case $num in
 esac
 }
 
-# 安装并配置
+### ========================== 安装流程 ==========================
 install(){
 echo "🔑 输入 Cloudflare API Token:"
 read CF_API_TOKEN
 echo "🌍 输入 Zone ID:"
 read ZONE_ID
-echo "🆔 输入 DNS Record ID:"
-read DNS_RECORD_ID
 echo "🔤 请输入解析域名 (如: ddns.example.com):"
 read DOMAIN_NAME
 
 echo "📨 是否启用 Telegram 通知? (y/n)"
 read TG_CHOICE
-if [[ $TG_CHOICE == y ]];then
+if [[ $TG_CHOICE == y ]]; then
     read -p "Bot Token: " TG_BOT_TOKEN
     read -p "Chat ID: " TG_CHAT_ID
 fi
 
 mkdir -p /var/lib
 
-# 保存配置到文件
+### 获取 DNS_RECORD_ID 自动化
+DNS_RECORD_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records" \
+  -H "Authorization: Bearer $CF_API_TOKEN" \
+  -H "Content-Type: application/json" | \
+  jq -r ".result[] | select(.name==\"$DOMAIN_NAME\") | .id")
+
+if [ -z "$DNS_RECORD_ID" ]; then
+  echo "❌ 未找到该域名对应的 DNS 记录！请确保域名和 Zone ID 正确。"
+  exit 1
+fi
+
+### 保存配置
 cat > $CONFIG_FILE <<EOF
 CF_API_TOKEN="$CF_API_TOKEN"
 ZONE_ID="$ZONE_ID"
@@ -58,16 +66,10 @@ TG_BOT_TOKEN="$TG_BOT_TOKEN"
 TG_CHAT_ID="$TG_CHAT_ID"
 EOF
 
-# 主脚本
+### ========================== 主运行脚本 ==========================
 cat > $SCRIPT_FILE <<EOF
 #!/bin/bash
 source $CONFIG_FILE
-
-# 确保日志文件路径正确
-if [ ! -f "$LOG_FILE" ]; then
-    touch "$LOG_FILE"
-    chmod 666 "$LOG_FILE"  # 确保日志文件有写权限
-fi
 
 CURRENT_IP=\$(curl -s 'https://ip.164746.xyz/ipTop.html' | cut -d',' -f1)
 CURRENT_TIME=\$(date "+%Y-%m-%d %H:%M:%S")
@@ -90,7 +92,7 @@ if [[ "\$CURRENT_IP" != "\$LAST_IP" ]]; then
         
         echo "\$CURRENT_IP" > /var/lib/cf_last_ip.txt
 
-        # ==================== Telegram 通知 ====================
+        ### ============== Telegram 通知（精美版） ==============
         if [[ -n "\$TG_BOT_TOKEN" && -n "\$TG_CHAT_ID" ]]; then
             MSG="
 ✨ *Cloudflare DNS 自动更新通知*
@@ -115,27 +117,22 @@ if [[ "\$CURRENT_IP" != "\$LAST_IP" ]]; then
 ———————————————
 🎉 *更新成功！DNS 已同步完成。*
 "
-    
-            # 发送消息到 Telegram
-            RESPONSE=\$(curl -s -X POST "https://api.telegram.org/bot\$TG_BOT_TOKEN/sendMessage" \
-                -d "chat_id=\$TG_CHAT_ID&parse_mode=Markdown&text=\$MSG")
-    
-            # 打印 Telegram 返回的响应，方便调试
-            echo "Telegram 返回：\$RESPONSE" >> "$LOG_FILE"
+            curl -s -X POST "https://api.telegram.org/bot\$TG_BOT_TOKEN/sendMessage" \
+                -d "chat_id=\$TG_CHAT_ID&parse_mode=Markdown&text=\$MSG"
         fi
 
-        echo "[$CURRENT_TIME] 已更新 → \$CURRENT_IP (\$COUNTRY / \$ISP)" >> "$LOG_FILE"
+        echo "[$CURRENT_TIME] 已更新 → \$CURRENT_IP (\$COUNTRY / \$ISP)" >> $LOG_FILE
     else
-        echo "[$CURRENT_TIME] Cloudflare 更新失败" >> "$LOG_FILE"
+        echo "[$CURRENT_TIME] Cloudflare 更新失败" >> $LOG_FILE
     fi
 else
-    echo "[$CURRENT_TIME] IP 未变化 → \$CURRENT_IP" >> "$LOG_FILE"
+    echo "[$CURRENT_TIME] IP 未变化 → \$CURRENT_IP" >> $LOG_FILE
 fi
 EOF
 
 chmod +x $SCRIPT_FILE
 
-# 不重复添加定时任务
+### ========================== 不重复添加定时任务 ==========================
 if crontab -l 2>/dev/null | grep -q "$SCRIPT_FILE"; then
     echo "⏰ 定时任务已存在，无需重复添加！"
 else
@@ -146,7 +143,7 @@ fi
 echo "✨ 安装完成 → DDNS 已启动！"
 }
 
-# 卸载
+### ========================== 卸载 ==========================
 uninstall(){
 rm -f $CONFIG_FILE $SCRIPT_FILE $IP_FILE
 crontab -l | grep -v "cf_ddds_run.sh" | crontab -
