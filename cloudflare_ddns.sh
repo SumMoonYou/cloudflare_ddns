@@ -1,103 +1,101 @@
 #!/bin/bash
 
+# 配置文件路径和日志文件
 CONFIG_FILE="/etc/cf_ddds.conf"
-SCRIPT_FILE="/usr/local/bin/cf_ddds_run.sh"
-IP_FILE="/var/lib/cf_last_ip.txt"
+LAST_IP_FILE="/var/lib/cf_last_ip.txt"
 LOG_FILE="/var/log/cf_ddds.log"
+SCRIPT_PATH="/usr/local/bin/cf_ddds_update.sh"
+CRON_SCRIPT_PATH="/usr/local/bin/cf_ddns_update_cron.sh"
 
-### ========================== 菜单 ==========================
-menu(){
-clear
-echo "======== Cloudflare DDNS 自动更新 ========"
-echo "1) 安装/配置"
-echo "2) 卸载"
-echo "3) 手动运行一次"
-echo "4) 查看日志"
-echo "0) 退出"
-echo "----------------------------------------"
-read -p "请输入选择: " num
-
-case $num in
-1) install ;;
-2) uninstall ;;
-3) bash $SCRIPT_FILE ;;
-4) tail -n 50 $LOG_FILE ;;
-0) exit ;;
-*) echo "❌ 输入无效" && sleep 1 && menu ;;
-esac
+# 安装 jq 的函数
+install_jq() {
+    if ! command -v jq &> /dev/null; then
+        echo "未检测到 jq，正在安装 jq..."
+        
+        # 安装 jq
+        if [[ -x "$(command -v apt-get)" ]]; then
+            sudo apt-get update && sudo apt-get install -y jq
+        elif [[ -x "$(command -v yum)" ]]; then
+            sudo yum install -y jq
+        else
+            echo "无法自动安装 jq。请手动安装 jq 后重试。" >&2
+            exit 1
+        fi
+    else
+        echo "jq 已安装，继续执行..."
+    fi
 }
 
-### ========================== 安装流程 ==========================
-install(){
-echo "🔑 输入 Cloudflare API Token:"
-read CF_API_TOKEN
-echo "🌍 输入 Zone ID:"
-read ZONE_ID
-echo "🔤 请输入解析域名 (如: ddns.example.com):"
-read DOMAIN_NAME
+# 获取 DNS 记录 ID 的函数
+get_dns_record_id() {
+    echo "正在获取 DNS 记录 ID..."
+    
+    # 通过 Cloudflare API 获取 DNS 记录 ID
+    RESPONSE=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records?type=A&name=$DOMAIN_NAME" \
+        -H "Authorization: Bearer $CF_API_TOKEN" \
+        -H "Content-Type: application/json")
 
-# 获取 DNS Record ID
-DNS_RECORD_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records?name=$DOMAIN_NAME" \
-  -H "Authorization: Bearer $CF_API_TOKEN" \
-  -H "Content-Type: application/json" | \
-  jq -r '.result[0].id')
+    DNS_RECORD_ID=$(echo "$RESPONSE" | grep -oP '(?<="id":")[^"]*')
 
-if [ -z "$DNS_RECORD_ID" ]; then
-    echo "❌ 未找到匹配的 DNS 记录，请确保域名正确。"
-    exit 1
-fi
+    if [[ -z "$DNS_RECORD_ID" ]]; then
+        echo "未找到 DNS 记录 ID，请确保域名 $DOMAIN_NAME 在 Cloudflare 中已正确配置。" >&2
+        exit 1
+    else
+        echo "成功获取 DNS 记录 ID: $DNS_RECORD_ID"
+    fi
+}
 
-echo "🆔 找到 DNS Record ID: $DNS_RECORD_ID"
+# 检查是否在禁用时段内
+check_disabled_time() {
+    # 获取用户配置的禁用时段
+    source "$CONFIG_FILE"
+    
+    # 提取禁用时段的小时部分（24小时制）
+    DISABLED_START_HOUR=$(echo $DISABLED_TIME | cut -d'-' -f1 | cut -d':' -f1)
+    DISABLED_END_HOUR=$(echo $DISABLED_TIME | cut -d'-' -f2 | cut -d':' -f1)
 
-echo "📨 是否启用 Telegram 通知? (y/n)"
-read TG_CHOICE
-if [[ $TG_CHOICE == y ]]; then
-    read -p "Bot Token: " TG_BOT_TOKEN
-    read -p "Chat ID: " TG_CHAT_ID
-fi
+    # 确保时间格式正确（24小时制）
+    if [[ ! "$DISABLED_START_HOUR" =~ ^[0-9]+$ ]] || [[ ! "$DISABLED_END_HOUR" =~ ^[0-9]+$ ]]; then
+        echo "时间格式错误：禁用时段必须为 HH:MM-HH:MM 格式（24小时制）"
+        exit 1
+    fi
 
-mkdir -p /var/lib
+    # 获取当前小时（北京时间）
+    CURRENT_HOUR=$(TZ='Asia/Shanghai' date +'%H')
 
-### 保存配置
-cat > $CONFIG_FILE <<EOF
-CF_API_TOKEN="$CF_API_TOKEN"
-ZONE_ID="$ZONE_ID"
-DNS_RECORD_ID="$DNS_RECORD_ID"
-DOMAIN_NAME="$DOMAIN_NAME"
-TG_BOT_TOKEN="$TG_BOT_TOKEN"
-TG_CHAT_ID="$TG_CHAT_ID"
-EOF
+    # 如果当前小时在禁用时段内，则返回 1（表示不执行）
+    if (( CURRENT_HOUR >= DISABLED_START_HOUR && CURRENT_HOUR < DISABLED_END_HOUR )); then
+        echo "当前时间在禁用时段内（$DISABLED_TIME），不执行更新。"
+        return 1
+    fi
 
-### ========================== 主运行脚本 ==========================
-cat > $SCRIPT_FILE <<EOF
-#!/bin/bash
-source $CONFIG_FILE
+    # 如果不在禁用时段内，则返回 0（表示可以执行）
+    return 0
+}
 
-CURRENT_IP=\$(curl -s 'https://ip.164746.xyz/ipTop.html' | cut -d',' -f1)
-CURRENT_TIME=\$(date "+%Y-%m-%d %H:%M:%S")
-IP_INFO=\$(curl -s "http://ip-api.com/json/\$CURRENT_IP?lang=zh-CN")
-COUNTRY=\$(echo "\$IP_INFO" | grep -oP '(?<="country":").*?(?=")')
-ISP=\$(echo "\$IP_INFO" | grep -oP '(?<="isp":").*?(?=")')
+# 更新 DNS 记录
+update_dns_record() {
+    CURRENT_IP=$(curl -s 'https://ip.164746.xyz/ipTop.html' | cut -d',' -f1)
+    CURRENT_TIME=$(TZ='Asia/Shanghai' date "+%Y-%m-%d %H:%M:%S")
 
-# 如果文件不存在则保存当前 IP
-[[ ! -f "/var/lib/cf_last_ip.txt" ]] && echo "\$CURRENT_IP" > /var/lib/cf_last_ip.txt
-LAST_IP=\$(cat /var/lib/cf_last_ip.txt)
+    # 获取 IP 信息（通过 IP-API 获取地理位置信息）
+    IP_INFO=$(curl -s "http://ip-api.com/json/$CURRENT_IP?lang=zh-CN")
+    COUNTRY=$(echo "$IP_INFO" | jq -r '.country')
+    CITY=$(echo "$IP_INFO" | jq -r '.city')
+    ISP=$(echo "$IP_INFO" | jq -r '.isp')
 
-# 如果 IP 发生变化，则更新 Cloudflare 记录
-if [[ "\$CURRENT_IP" != "\$LAST_IP" ]]; then
-    RESPONSE=\$(curl -s -X PATCH "https://api.cloudflare.com/client/v4/zones/\$ZONE_ID/dns_records/\$DNS_RECORD_ID" \
-        -H "Authorization: Bearer \$CF_API_TOKEN" \
+    # 更新 Cloudflare 记录
+    RESPONSE=$(curl -s -X PATCH "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records/$DNS_RECORD_ID" \
+        -H "Authorization: Bearer $CF_API_TOKEN" \
         -H "Content-Type: application/json" \
-        --data "{\"type\":\"A\",\"name\":\"$DOMAIN_NAME\",\"content\":\"\$CURRENT_IP\",\"ttl\":1,\"proxied\":false}")
+        --data "{\"type\":\"A\",\"name\":\"$DOMAIN_NAME\",\"content\":\"$CURRENT_IP\",\"ttl\":1,\"proxied\":false}")
 
-    if echo "\$RESPONSE" | grep -q '"success":true'; then
-        
-        echo "\$CURRENT_IP" > /var/lib/cf_last_ip.txt
+    if echo "$RESPONSE" | grep -q '"success":true'; then
+        # 无论 IP 是否变化，都更新记录并发送通知
+        echo "$CURRENT_IP" > "$LAST_IP_FILE"
 
-        ### ============== Telegram 通知（精美版） ==============
-        if [[ -n "\$TG_BOT_TOKEN" && -n "\$TG_CHAT_ID" ]]; then
-            
-MSG="
+        # 发送 Telegram 消息通知
+        MSG="
 ✨ *Cloudflare DNS 自动更新通知*
 
 📌 *域名：*
@@ -107,50 +105,115 @@ MSG="
 \`$CURRENT_IP\`
 
 🌏 *IP 信息：*
-• *国家地区：* \$COUNTRY  
-• *运营商：* \$ISP  
+• *国家地区：* $COUNTRY  
+• *城市：* $CITY  
+• *运营商：* $ISP  
 
 ⏰ *更新时间：*
 \`$CURRENT_TIME\`
 
 🔍 *IP 查询：*
-• https://ip.sb/ip/$CURRENT_IP
-• http://ip-api.com/json/$CURRENT_IP
+• [ip.sb](https://ip.sb/ip/$CURRENT_IP)
+• [ip-api](http://ip-api.com/json/$CURRENT_IP)
 
 ———————————————
 🎉 *更新成功！DNS 已同步完成。*
 "
-            curl -s -X POST "https://api.telegram.org/bot\$TG_BOT_TOKEN/sendMessage" \
-                -d "chat_id=\$TG_CHAT_ID&parse_mode=Markdown&text=\$MSG"
-        fi
 
-        echo "[$CURRENT_TIME] 已更新 → \$CURRENT_IP (\$COUNTRY / \$ISP)" >> $LOG_FILE
+        # 发送 Telegram 消息
+        curl -s -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
+            -d "chat_id=$TG_CHAT_ID&parse_mode=Markdown&text=$MSG"
+
+        echo "[] 已更新 → $CURRENT_IP ($COUNTRY / $ISP)" >> "$LOG_FILE"
     else
-        echo "[$CURRENT_TIME] Cloudflare 更新失败" >> $LOG_FILE
+        echo "[] Cloudflare 更新失败" >> "$LOG_FILE"
     fi
-else
-    echo "[$CURRENT_TIME] IP 未变化 → \$CURRENT_IP" >> $LOG_FILE
-fi
-EOF
-
-chmod +x $SCRIPT_FILE
-
-### ========================== 不重复添加定时任务 ==========================
-if crontab -l 2>/dev/null | grep -q "$SCRIPT_FILE"; then
-    echo "⏰ 定时任务已存在，无需重复添加！"
-else
-    (crontab -l 2>/dev/null; echo "0 * * * * $SCRIPT_FILE") | crontab -
-    echo "⏰ 已创建定时任务（每小时执行一次）"
-fi
-
-echo "✨ 安装完成 → DDNS 已启动！"
 }
 
-### ========================== 卸载 ==========================
-uninstall(){
-rm -f $CONFIG_FILE $SCRIPT_FILE $IP_FILE
-crontab -l | grep -v "cf_ddds_run.sh" | crontab -
-echo "🗑️ 已卸载并清理所有配置。"
+# 安装脚本
+install_script() {
+    echo "正在安装更新脚本..."
+
+    # 手动输入配置信息
+    read -p "请输入 Cloudflare 区域 ID (ZONE_ID): " ZONE_ID
+    read -p "请输入 Cloudflare API Token (CF_API_TOKEN): " CF_API_TOKEN
+    read -p "请输入域名 (DOMAIN_NAME): " DOMAIN_NAME
+    read -p "请输入 Telegram 机器人 Token (TG_BOT_TOKEN): " TG_BOT_TOKEN
+    read -p "请输入 Telegram 聊天 ID (TG_CHAT_ID): " TG_CHAT_ID
+    read -p "请输入禁用时段（格式为 HH:MM-HH:MM, 例如 00:00-06:00）： " DISABLED_TIME
+
+    # 获取 DNS 记录 ID
+    get_dns_record_id
+
+    # 将配置保存到配置文件
+    echo "# 配置 Cloudflare 和 Telegram 信息" > "$CONFIG_FILE"
+    echo "ZONE_ID='$ZONE_ID'" >> "$CONFIG_FILE"
+    echo "DNS_RECORD_ID='$DNS_RECORD_ID'" >> "$CONFIG_FILE"
+    echo "CF_API_TOKEN='$CF_API_TOKEN'" >> "$CONFIG_FILE"
+    echo "DOMAIN_NAME='$DOMAIN_NAME'" >> "$CONFIG_FILE"
+    echo "TG_BOT_TOKEN='$TG_BOT_TOKEN'" >> "$CONFIG_FILE"
+    echo "TG_CHAT_ID='$TG_CHAT_ID'" >> "$CONFIG_FILE"
+    echo "DISABLED_TIME='$DISABLED_TIME'" >> "$CONFIG_FILE"
+
+    # 将更新脚本复制到指定目录
+    cp "$0" "$SCRIPT_PATH"
+    chmod +x "$SCRIPT_PATH"
+
+    # 创建定时任务更新脚本
+    echo "#!/bin/bash" > "$CRON_SCRIPT_PATH"
+    echo "LOG_FILE='/var/log/cf_ddds.log'" >> "$CRON_SCRIPT_PATH"
+    echo "SCRIPT_PATH='/usr/local/bin/cf_ddds_update.sh'" >> "$CRON_SCRIPT_PATH"
+    echo "echo '==== 定时任务执行开始: \$(date) ====' >> '\$LOG_FILE'" >> "$CRON_SCRIPT_PATH"
+    echo "'\$SCRIPT_PATH' >> '\$LOG_FILE' 2>&1" >> "$CRON_SCRIPT_PATH"
+    echo "echo '==== 定时任务执行结束: \$(date) ====' >> '\$LOG_FILE'" >> "$CRON_SCRIPT_PATH"
+
+    # 赋予执行权限
+    chmod +x "$SCRIPT_PATH"
+    chmod +x "$CRON_SCRIPT_PATH"
+
+    # 自动添加到 crontab
+    (crontab -l ; echo "0 * * * * $CRON_SCRIPT_PATH") | crontab -
+
+    echo "更新脚本已安装到 $SCRIPT_PATH"
+    echo "定时任务更新脚本已创建并自动添加到 crontab 中，每小时执行一次。"
 }
 
-menu
+# 卸载脚本
+uninstall_script() {
+    echo "正在卸载更新脚本..."
+
+    # 删除相关文件
+    rm -f "$CONFIG_FILE"
+    rm -f "$SCRIPT_PATH"
+    rm -f "$CRON_SCRIPT_PATH"
+
+    # 删除定时任务
+    crontab -l | grep -v "$CRON_SCRIPT_PATH" | crontab -
+
+    echo "更新脚本和定时任务已卸载。"
+}
+
+# 显示菜单
+echo "请选择操作："
+echo "1. 安装更新脚本"
+echo "2. 卸载更新脚本"
+echo "3. 手动执行更新"
+
+read -p "请输入选项 (1/2/3): " OPTION
+
+case "$OPTION" in
+    1)
+        install_jq
+        install_script
+        ;;
+    2)
+        uninstall_script
+        ;;
+    3)
+        check_disabled_time && update_dns_record
+        ;;
+    *)
+        echo "无效选项，请重新选择。"
+        exit 1
+        ;;
+esac
