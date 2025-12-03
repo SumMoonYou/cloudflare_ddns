@@ -138,7 +138,7 @@ if [[ "$CURRENT_IP" != "$LAST_IP" || "$FORCE_UPDATE" == "force" ]]; then
         fi
     }
 
-    # ==== Telegram 通知 ====
+    # ==== Telegram 通知（夜间 0-6 点静默） ====
     {
         HOUR=$(TZ="Asia/Shanghai" date +%H)
         SEND_TG=true
