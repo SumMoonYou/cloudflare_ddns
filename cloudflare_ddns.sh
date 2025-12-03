@@ -30,20 +30,22 @@ menu(){
     clear
     echo "======== Cloudflare DDNS 自动更新 ========"
     echo "1) 安装/配置"
-    echo "2) 卸载"
-    echo "3) 手动运行一次"
-    echo "4) 查看日志"
-    echo "5) 强制更新一次"
+    echo "2) 升级脚本（保留配置）"
+    echo "3) 卸载"
+    echo "4) 手动运行一次"
+    echo "5) 查看日志"
+    echo "6) 强制更新一次"
     echo "0) 退出"
     echo "----------------------------------------"
     read -p "请输入选择: " num
 
     case $num in
         1) install ;;
-        2) uninstall ;;
-        3) bash $SCRIPT_FILE ;;
-        4) tail -n 50 $LOG_FILE ;;
-        5) bash $SCRIPT_FILE force ;;
+        2) upgrade ;;
+        3) uninstall ;;
+        4) bash $SCRIPT_FILE ;;
+        5) tail -n 50 $LOG_FILE ;;
+        6) bash $SCRIPT_FILE force ;;
         0) exit ;;
         *) echo "❌ 输入无效" && sleep 1 && menu ;;
     esac
@@ -100,7 +102,32 @@ TG_CHAT_ID="$TG_CHAT_ID"
 EOF
 
     # 创建主运行脚本
-    cat > $SCRIPT_FILE <<'EOF'
+    create_run_script
+
+    # 添加定时任务
+    add_cron
+
+    echo "✨ 安装完成 → DDNS 已启动！"
+}
+
+# ================== 升级流程（保留配置） ==================
+upgrade(){
+    install_dependencies
+
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        echo "❌ 配置文件不存在，请先安装"
+        exit 1
+    fi
+
+    echo "🔄 升级中... 仅更新主运行脚本，保留配置文件"
+    create_run_script
+    add_cron
+    echo "✅ 升级完成"
+}
+
+# ================== 创建主运行脚本 ==================
+create_run_script(){
+cat > $SCRIPT_FILE <<'EOF'
 #!/bin/bash
 source /etc/cf_ddds.conf
 
@@ -190,9 +217,11 @@ else
 fi
 EOF
 
-    chmod +x $SCRIPT_FILE
+chmod +x $SCRIPT_FILE
+}
 
-    # 添加定时任务
+# ================== 添加定时任务 ==================
+add_cron(){
     if command -v crontab >/dev/null 2>&1; then
         if crontab -l 2>/dev/null | grep -q "$SCRIPT_FILE"; then
             echo "⏰ 定时任务已存在，无需重复添加！"
@@ -203,17 +232,15 @@ EOF
     else
         echo "⚠️ crontab 未找到，请手动设置定时任务"
     fi
-
-    echo "✨ 安装完成 → DDNS 已启动！"
 }
 
 # ================== 卸载 ==================
 uninstall(){
-    rm -f $CONFIG_FILE $SCRIPT_FILE $IP_FILE $LOG_FILE
+    rm -f $SCRIPT_FILE $IP_FILE $LOG_FILE
     if command -v crontab >/dev/null 2>&1; then
         crontab -l | grep -v "cf_ddds_run.sh" | crontab -
     fi
-    echo "🗑️ 已卸载并清理所有生成文件和定时任务。"
+    echo "🗑️ 已卸载并清理所有生成文件和定时任务，配置文件已保留。"
 }
 
 menu
