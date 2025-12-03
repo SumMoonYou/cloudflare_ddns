@@ -170,7 +170,7 @@ if [[ "$CURRENT_IP" != "$LAST_IP" || "$FORCE_UPDATE" == "force" ]]; then
         fi
     }
 
-    # ==== Telegram 消息（HTML 模式，夜间静默 0-6 点） ====
+    # ==== Telegram 消息（HTML 模式，静默发送） ====
     {
         HOUR=$(TZ="Asia/Shanghai" date +%H)
         SEND_TG=true
@@ -206,7 +206,7 @@ MSG="<b>✨ Cloudflare DNS 自动更新通知 ✨</b>
             curl -s -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
                 -d "chat_id=$TG_CHAT_ID" \
                 --data-urlencode "text=$MSG" \
-                -d "parse_mode=HTML"
+                -d "parse_mode=HTML" > /dev/null 2>&1
         fi
     }
 
