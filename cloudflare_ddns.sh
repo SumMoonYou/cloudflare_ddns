@@ -131,7 +131,7 @@ source /etc/cf_ddds.conf
 FORCE_UPDATE=$1
 
 CURRENT_IP=$(curl -s 'https://ip.164746.xyz/ipTop.html' | cut -d',' -f1)
-CURRENT_TIME=$(date "+%Y-%m-%d %H:%M:%S")
+CURRENT_TIME=$(TZ="Asia/Shanghai" date "+%Y-%m-%d %H:%M:%S")
 
 IP_INFO=$(curl -s "http://ip-api.com/json/$CURRENT_IP?lang=zh-CN")
 COUNTRY=$(echo "$IP_INFO" | jq -r '.country')
@@ -170,7 +170,7 @@ if [[ "$CURRENT_IP" != "$LAST_IP" || "$FORCE_UPDATE" == "force" ]]; then
         fi
     }
 
-    # ==== Telegram 消息（HTML 模式） ====
+    # ==== Telegram 消息（HTML 模式，夜间静默 0-6 点） ====
     {
         HOUR=$(TZ="Asia/Shanghai" date +%H)
         SEND_TG=true
@@ -201,9 +201,6 @@ MSG="<b>✨ Cloudflare DNS 自动更新通知 ✨</b>
 <b>🔍 IP 查询:</b>
 • <a href='https://ip.sb/ip/$CURRENT_IP'>IP.sb</a>
 • <a href='http://ip-api.com/json/$CURRENT_IP'>ip-api.com</a>
-
-———————————————
-🎉 更新完成
 "
 
             curl -s -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
