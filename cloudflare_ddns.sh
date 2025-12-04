@@ -1,6 +1,6 @@
 #!/bin/bash
 
-SCRIPT_VERSION="v1.1.0"  # 脚本版本号
+SCRIPT_VERSION="v1.1.1"  # 脚本版本号
 
 CONFIG_FILE="/etc/cf_ddds.conf"
 SCRIPT_FILE="/usr/local/bin/cf_ddds_run.sh"
@@ -222,22 +222,18 @@ if [[ -n "$TG_BOT_TOKEN" && -n "$TG_CHAT_ID" && "$SEND_TG" == true ]]; then
 <b>📌 域名:</b> <code>$DOMAIN_NAME</code>
 <b>🆕 新 IP:</b> <code>$CURRENT_IP</code>
 
-<b>🌏 IP 信息:</b>
-• 国家地区: $COUNTRY
-• 省/州: $REGION
-• 城市: $CITY
-• 邮编: $ZIP
-• 时区: $TIMEZONE
-• 经纬度: $LAT, $LON
-• ISP: $ISP
-• 组织: $ORG
-• ASN: $ASN
+<b>🌏 IP 信息：</b>
+• 国家地区： $COUNTRY
+• 省/州： $REGION
+• 城市： $CITY
+• 邮编： $ZIP
+• 时区： $TIMEZONE
+• 经纬度： $LAT, $LON
+• ISP： $ISP
+• 组织： $ORG
+• ASN： $ASN
 
 <b>⏰ 更新时间:</b> <code>$CURRENT_TIME</code>
-
-<b>🔍 IP 查询:</b>
-• <a href='https://ip.sb/ip/$CURRENT_IP'>ip.sb</a>
-• <a href='http://ip-api.com/json/$CURRENT_IP'>ip-api.com</a>
 "
 
     for ((i=1;i<=MAX_RETRIES;i++)); do
