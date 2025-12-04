@@ -1,6 +1,6 @@
 #!/bin/bash
 
-SCRIPT_VERSION="v1.1.4"  # 脚本版本号
+SCRIPT_VERSION="v1.1.3"  # 脚本版本号
 
 CONFIG_FILE="/etc/cf_ddds.conf"
 SCRIPT_FILE="/usr/local/bin/cf_ddds_run.sh"
@@ -195,12 +195,6 @@ HOUR=$(TZ='Asia/Shanghai' date +%H)
 SEND_TG=true
 if (( HOUR >=0 && HOUR < 6 )); then SEND_TG=false; fi
 
-# 获取新IP的延迟
-PING_RESULT=$(ping -c 4 $CURRENT_IP | grep 'time=' | tail -n 1 | sed 's/.*time=\([0-9.]*\) ms/\1/')
-if [[ -z "$PING_RESULT" ]]; then
-    PING_RESULT="无法获取延迟"
-fi
-
 if [[ -n "$TG_BOT_TOKEN" && -n "$TG_CHAT_ID" && "$SEND_TG" == true ]]; then
     MSG="
 <b>✨ <u>Cloudflare DNS 更新提醒</u></b>
@@ -209,15 +203,13 @@ if [[ -n "$TG_BOT_TOKEN" && -n "$TG_CHAT_ID" && "$SEND_TG" == true ]]; then
 
 <b>🌏 IP 信息：</b>
 • <b>国家地区：</b> $COUNTRY  
-• <b>城市：</b> $CITY  
-• <b>时区：</b> $TIMEZONE  
+• <b>城   市：</b> $CITY  
+• <b>时   区：</b> $TIMEZONE  
 
 <b>⏰ 更新时间：</b> <code>$CURRENT_TIME</code>
 
-<b>⏳ Ping 延迟（至新 IP）：</b> $PING_RESULT ms
 
-
-<i>🎉 更新完成，祝您一切顺利！</i>
+<i>🎉 更新完成！感谢使用，祝您一切顺利！</i>
 "
 
     for ((i=1;i<=MAX_RETRIES;i++)); do
@@ -228,7 +220,6 @@ if [[ -n "$TG_BOT_TOKEN" && -n "$TG_CHAT_ID" && "$SEND_TG" == true ]]; then
         sleep 2
     done
 fi
-
 EOF
 
 chmod +x $SCRIPT_FILE
