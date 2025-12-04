@@ -1,6 +1,6 @@
 #!/bin/bash
 
-SCRIPT_VERSION="v1.1.2"  # 脚本版本号
+SCRIPT_VERSION="v1.1.3"  # 脚本版本号
 
 CONFIG_FILE="/etc/cf_ddds.conf"
 SCRIPT_FILE="/usr/local/bin/cf_ddds_run.sh"
