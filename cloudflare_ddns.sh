@@ -1,6 +1,6 @@
 #!/bin/bash
 
-SCRIPT_VERSION="v1.1.1"  # 脚本版本号
+SCRIPT_VERSION="v1.1.2"  # 脚本版本号
 
 CONFIG_FILE="/etc/cf_ddds.conf"
 SCRIPT_FILE="/usr/local/bin/cf_ddds_run.sh"
@@ -190,50 +190,29 @@ ISP=$(echo "$IP_INFO" | jq -r '.isp')
 ORG=$(echo "$IP_INFO" | jq -r '.org')
 ASN=$(echo "$IP_INFO" | jq -r '.as')
 
-# ==== 更新 Cloudflare DNS ====
-UPDATE_SUCCESS=false
-for ((i=1;i<=MAX_RETRIES;i++)); do
-    RESPONSE=$(curl -s -X PATCH "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records/$DNS_RECORD_ID" \
-        -H "Authorization: Bearer $CF_API_TOKEN" \
-        -H "Content-Type: application/json" \
-        --data "{\"type\":\"A\",\"name\":\"$DOMAIN_NAME\",\"content\":\"$CURRENT_IP\",\"ttl\":1,\"proxied\":false}")
-    if echo "$RESPONSE" | grep -q '"success":true'; then
-        UPDATE_SUCCESS=true
-        break
-    fi
-    sleep 2
-done
-
-if $UPDATE_SUCCESS; then
-    echo "$CURRENT_IP" > $IP_FILE
-    echo "[$CURRENT_TIME] Cloudflare DNS 更新成功 → $CURRENT_IP" >> $LOG_FILE
-else
-    echo "[$CURRENT_TIME] Cloudflare DNS 更新失败 → $RESPONSE" >> $LOG_FILE
-fi
-
 # ==== 发送 Telegram 消息（静默，HTML，夜间静默 0-6点） ====
 HOUR=$(TZ='Asia/Shanghai' date +%H)
 SEND_TG=true
 if (( HOUR >=0 && HOUR < 6 )); then SEND_TG=false; fi
 
 if [[ -n "$TG_BOT_TOKEN" && -n "$TG_CHAT_ID" && "$SEND_TG" == true ]]; then
-    MSG="<b>✨ Cloudflare DNS 自动更新通知 ✨</b>
+    MSG="
+<b>✨ <u>Cloudflare DNS 更新提醒</u></b>
 
-<b>📌 域名:</b> <code>$DOMAIN_NAME</code>
-<b>🆕 新 IP:</b> <code>$CURRENT_IP</code>
+<b>🌟 新 IP 地址：</b> <code>$CURRENT_IP</code>
 
 <b>🌏 IP 信息：</b>
-• 国家地区： $COUNTRY
-• 省/州： $REGION
-• 城市： $CITY
-• 邮编： $ZIP
-• 时区： $TIMEZONE
-• 经纬度： $LAT, $LON
-• ISP： $ISP
-• 组织： $ORG
-• ASN： $ASN
+• <b>国家地区：</b> $COUNTRY  
+• <b>城市：</b> $CITY  
+• <b>时区：</b> $TIMEZONE  
 
-<b>⏰ 更新时间:</b> <code>$CURRENT_TIME</code>
+<b>⏰ 更新时间：</b> <code>$CURRENT_TIME</code>
+
+<b>🔍 详细查询：</b>
+• <a href='https://ip.sb/ip/$CURRENT_IP'>IP.sb</a>
+• <a href='http://ip-api.com/json/$CURRENT_IP'>ip-api.com</a>
+
+<i>🎉 更新完成！感谢使用，祝您一切顺利！</i>
 "
 
     for ((i=1;i<=MAX_RETRIES;i++)); do
