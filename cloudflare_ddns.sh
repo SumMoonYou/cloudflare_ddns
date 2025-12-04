@@ -203,14 +203,11 @@ if [[ -n "$TG_BOT_TOKEN" && -n "$TG_CHAT_ID" && "$SEND_TG" == true ]]; then
 
 <b>🌏 IP 信息：</b>
 • <b>国家地区：</b> $COUNTRY  
-• <b>城市：</b> $CITY  
-• <b>时区：</b> $TIMEZONE  
+• <b>城   市：</b> $CITY  
+• <b>时   区：</b> $TIMEZONE  
 
 <b>⏰ 更新时间：</b> <code>$CURRENT_TIME</code>
 
-<b>🔍 详细查询：</b>
-• <a href='https://ip.sb/ip/$CURRENT_IP'>IP.sb</a>
-• <a href='http://ip-api.com/json/$CURRENT_IP'>ip-api.com</a>
 
 <i>🎉 更新完成！感谢使用，祝您一切顺利！</i>
 "
