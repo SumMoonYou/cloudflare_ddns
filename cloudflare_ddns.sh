@@ -1,6 +1,6 @@
 #!/bin/bash
 
-SCRIPT_VERSION="v1.1.4"  # 脚本版本号
+SCRIPT_VERSION="v1.1.3"  # 脚本版本号
 
 CONFIG_FILE="/etc/cf_ddds.conf"
 SCRIPT_FILE="/usr/local/bin/cf_ddds_run.sh"
@@ -199,6 +199,8 @@ if [[ -n "$TG_BOT_TOKEN" && -n "$TG_CHAT_ID" && "$SEND_TG" == true ]]; then
     MSG="
 <b>✨ <u>Cloudflare DNS 更新提醒</u></b>
 
+<b>🔤 解析域名：</b> $DOMAIN_NAME 
+
 <b>🌟 新 IP 地址：</b> <code>$CURRENT_IP</code>
 
 <b>🌏 IP 信息：</b>
@@ -206,12 +208,12 @@ if [[ -n "$TG_BOT_TOKEN" && -n "$TG_CHAT_ID" && "$SEND_TG" == true ]]; then
 • <b>城   市：</b> $CITY  
 • <b>时   区：</b> $TIMEZONE  
 
-<b>🔤 解析域名：</b> $DOMAIN_NAME  <!-- 添加域名 -->
-
 <b>⏰ 更新时间：</b> <code>$CURRENT_TIME</code>
+
 
 <i>🎉 更新完成！感谢使用，祝您一切顺利！</i>
 "
+
     for ((i=1;i<=MAX_RETRIES;i++)); do
         curl -s -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
             -d "chat_id=$TG_CHAT_ID" \
