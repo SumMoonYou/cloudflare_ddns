@@ -1,6 +1,6 @@
 #!/bin/bash
 
-SCRIPT_VERSION="v1.2.0"  # 最终整合版
+SCRIPT_VERSION="v1.2.1"  # 修复 08/09 报错的版本
 
 CONFIG_FILE="/etc/cf_ddds.conf"
 SCRIPT_FILE="/usr/local/bin/cf_ddds_run.sh"
@@ -133,7 +133,7 @@ upgrade(){
 create_run_script(){
 cat > $SCRIPT_FILE <<'EOF'
 #!/bin/bash
-SCRIPT_VERSION="v1.2.0"
+SCRIPT_VERSION="v1.2.1"
 source /etc/cf_ddds.conf
 
 MAX_RETRIES=3
@@ -147,6 +147,7 @@ log(){
 log "运行 Cloudflare DDNS 脚本 $SCRIPT_VERSION"
 
 # ================== 获取当前 IP ==================
+CURRENT_IP=""
 for ((i=1;i<=MAX_RETRIES;i++)); do
     CURRENT_IP=$(curl -s --max-time 10 'https://ip.164746.xyz/ipTop.html' | cut -d',' -f1)
     [[ -n "$CURRENT_IP" ]] && break
@@ -168,8 +169,10 @@ if [[ "$CURRENT_IP" == "$LAST_IP" && "$1" != "force" ]]; then
 fi
 
 # ================== 获取 IP 详细信息 ==================
+IP_INFO=""
+STATUS=""
 for ((i=1;i<=MAX_RETRIES;i++)); do
-    IP_INFO=$(curl -s --max-time 10 "http://ip-api.com/json/$CURRENT_IP?lang=zh-CCN")
+    IP_INFO=$(curl -s --max-time 10 "http://ip-api.com/json/$CURRENT_IP?lang=zh-CN")
     STATUS=$(echo "$IP_INFO" | jq -r '.status')
     [[ "$STATUS" == "success" ]] && break
     sleep 2
@@ -200,8 +203,9 @@ else
     log "DNS 更新失败：$UPDATE_RESULT"
 fi
 
-# ================== Telegram 通知（成功/失败区分） ==================
-HOUR=$(TZ='Asia/Shanghai' date +%H)
+# ================== Telegram 通知（成功/失败区分，已修复小时解析） ==================
+# 使用 printf 强制十进制，避免 "08"/"09" 被当成八进制导致 (( )) 报错
+HOUR=$(printf "%d" $(TZ='Asia/Shanghai' date +%H))
 
 send_tg_msg(){
     local MSG="$1"
@@ -214,7 +218,7 @@ send_tg_msg(){
     done
 }
 
-# ======= 成功通知：遵守夜间静默 =======
+# ======= 成功通知：遵守夜间静默（0-6 点） =======
 if [[ "$SUCCESS" == "true" ]]; then
 
     if (( HOUR >= 0 && HOUR < 6 )); then
@@ -238,11 +242,14 @@ if [[ "$SUCCESS" == "true" ]]; then
 
 <i>🎉 DNS 记录已成功更新！</i>
 "
-    send_tg_msg "$MSG"
+    # 只有在配置了 TG 且 Chat ID 存在时才发送
+    if [[ -n "$TG_BOT_TOKEN" && -n "$TG_CHAT_ID" ]]; then
+        send_tg_msg "$MSG"
+    fi
     exit 0
 fi
 
-# ======= 失败通知：必须发送 =======
+# ======= 失败通知：必须发送（不受夜间静默影响） =======
 ERROR_MSG=$(echo "$UPDATE_RESULT" | jq -r '.errors | tostring')
 
 MSG="
@@ -258,7 +265,9 @@ MSG="
 <i>⚠ 请检查 API Token、Zone ID、DNS 记录是否正确。</i>
 "
 
-send_tg_msg "$MSG"
+if [[ -n "$TG_BOT_TOKEN" && -n "$TG_CHAT_ID" ]]; then
+    send_tg_msg "$MSG"
+fi
 
 EOF
 
