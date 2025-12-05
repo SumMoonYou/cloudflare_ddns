@@ -1,6 +1,6 @@
 #!/bin/bash
 
-SCRIPT_VERSION="v1.1.3"  # 脚本版本号
+SCRIPT_VERSION="v1.2.0"  # 最终整合版
 
 CONFIG_FILE="/etc/cf_ddds.conf"
 SCRIPT_FILE="/usr/local/bin/cf_ddds_run.sh"
@@ -16,11 +16,11 @@ install_dependencies(){
         if ! command -v $cmd >/dev/null 2>&1; then
             echo "$cmd 未安装，尝试安装..."
             if [[ -f /etc/debian_version ]]; then
-                sudo apt-get update && sudo apt-get install -y $cmd
+                apt-get update && apt-get install -y $cmd
             elif [[ -f /etc/redhat-release ]]; then
-                sudo yum install -y $cmd
+                yum install -y $cmd
             elif [[ -f /etc/alpine-release ]]; then
-                sudo apk add --no-cache $cmd
+                apk add --no-cache $cmd
             else
                 echo "请手动安装 $cmd"
                 exit 1
@@ -60,8 +60,8 @@ menu(){
 install(){
     install_dependencies
 
-    [[ ! -d "/var/lib" ]] && mkdir -p /var/lib
-    [[ ! -d "$LOG_DIR" ]] && mkdir -p $LOG_DIR
+    mkdir -p /var/lib
+    mkdir -p $LOG_DIR
 
     [[ ! -f "$CONFIG_FILE" ]] && touch $CONFIG_FILE
     [[ ! -f "$IP_FILE" ]] && touch $IP_FILE
@@ -98,8 +98,7 @@ install(){
         TG_CHAT_ID=""
     fi
 
-    # 保存配置
-    cat > $CONFIG_FILE <<EOF
+cat > $CONFIG_FILE <<EOF
 CF_API_TOKEN="$CF_API_TOKEN"
 ZONE_ID="$ZONE_ID"
 DNS_RECORD_ID="$DNS_RECORD_ID"
@@ -115,7 +114,6 @@ EOF
     setup_logrotate
 
     echo "✨ 安装完成 → DDNS 已启动！"
-    echo "脚本版本: $SCRIPT_VERSION"
 }
 
 # ================== 升级流程 ==================
@@ -125,103 +123,143 @@ upgrade(){
         echo "❌ 配置文件不存在，请先安装"
         exit 1
     fi
-    echo "🔄 升级中... 仅更新主运行脚本，保留配置文件"
+    echo "🔄 升级中..."
     create_run_script
     add_cron
     echo "✅ 升级完成"
-    echo "脚本版本: $SCRIPT_VERSION"
 }
 
 # ================== 创建主运行脚本 ==================
 create_run_script(){
 cat > $SCRIPT_FILE <<'EOF'
 #!/bin/bash
-SCRIPT_VERSION="v1.1.0"
+SCRIPT_VERSION="v1.2.0"
 source /etc/cf_ddds.conf
 
 MAX_RETRIES=3
 IP_FILE="/var/lib/cf_last_ip.txt"
 LOG_FILE="/var/log/cf_ddds.log"
 
-echo "[$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')] 运行 Cloudflare DDNS 脚本 $SCRIPT_VERSION" >> $LOG_FILE
+log(){
+    echo "[$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')] $1" >> $LOG_FILE
+}
 
-# 获取当前公网 IP（重试机制）
+log "运行 Cloudflare DDNS 脚本 $SCRIPT_VERSION"
+
+# ================== 获取当前 IP ==================
 for ((i=1;i<=MAX_RETRIES;i++)); do
     CURRENT_IP=$(curl -s --max-time 10 'https://ip.164746.xyz/ipTop.html' | cut -d',' -f1)
-    if [[ -n "$CURRENT_IP" ]]; then break; fi
+    [[ -n "$CURRENT_IP" ]] && break
     sleep 2
 done
 
 if [[ -z "$CURRENT_IP" ]]; then
-    echo "[$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')] 获取公网 IP 失败" >> $LOG_FILE
+    log "获取公网 IP 失败"
     exit 1
 fi
 
 CURRENT_TIME=$(TZ="Asia/Shanghai" date "+%Y-%m-%d %H:%M:%S")
 LAST_IP=$(cat $IP_FILE 2>/dev/null || echo "")
 
-# IP 未变化且非强制更新时退出
+# ================== 检查 IP 是否变化 ==================
 if [[ "$CURRENT_IP" == "$LAST_IP" && "$1" != "force" ]]; then
-    echo "[$CURRENT_TIME] IP 未变化 → $CURRENT_IP" >> $LOG_FILE
+    log "IP 未变化 → $CURRENT_IP"
     exit 0
 fi
 
-# 获取 IP 详细信息
+# ================== 获取 IP 详细信息 ==================
 for ((i=1;i<=MAX_RETRIES;i++)); do
-    IP_INFO=$(curl -s --max-time 10 "http://ip-api.com/json/$CURRENT_IP?lang=zh-CN")
+    IP_INFO=$(curl -s --max-time 10 "http://ip-api.com/json/$CURRENT_IP?lang=zh-CCN")
     STATUS=$(echo "$IP_INFO" | jq -r '.status')
-    if [[ "$STATUS" == "success" ]]; then break; fi
+    [[ "$STATUS" == "success" ]] && break
     sleep 2
 done
 
 if [[ "$STATUS" != "success" ]]; then
-    echo "[$CURRENT_TIME] IP 信息获取失败" >> $LOG_FILE
+    log "IP 信息获取失败"
     exit 1
 fi
 
 COUNTRY=$(echo "$IP_INFO" | jq -r '.country')
-REGION=$(echo "$IP_INFO" | jq -r '.regionName')
 CITY=$(echo "$IP_INFO" | jq -r '.city')
-ZIP=$(echo "$IP_INFO" | jq -r '.zip')
-LAT=$(echo "$IP_INFO" | jq -r '.lat')
-LON=$(echo "$IP_INFO" | jq -r '.lon')
 TIMEZONE=$(echo "$IP_INFO" | jq -r '.timezone')
 ISP=$(echo "$IP_INFO" | jq -r '.isp')
-ORG=$(echo "$IP_INFO" | jq -r '.org')
-ASN=$(echo "$IP_INFO" | jq -r '.as')
 
-# ==== 发送 Telegram 消息（静默，HTML，夜间静默 0-6点） ====
+# ================== 更新 Cloudflare DNS ==================
+UPDATE_RESULT=$(curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records/$DNS_RECORD_ID" \
+    -H "Authorization: Bearer $CF_API_TOKEN" \
+    -H "Content-Type: application/json" \
+    --data "{\"type\":\"A\",\"name\":\"$DOMAIN_NAME\",\"content\":\"$CURRENT_IP\",\"ttl\":120,\"proxied\":false}")
+
+SUCCESS=$(echo "$UPDATE_RESULT" | jq -r '.success')
+
+if [[ "$SUCCESS" == "true" ]]; then
+    echo "$CURRENT_IP" > $IP_FILE
+    log "DNS 更新成功 → $DOMAIN_NAME = $CURRENT_IP"
+else
+    log "DNS 更新失败：$UPDATE_RESULT"
+fi
+
+# ================== Telegram 通知（成功/失败区分） ==================
 HOUR=$(TZ='Asia/Shanghai' date +%H)
-SEND_TG=true
-if (( HOUR >=0 && HOUR < 6 )); then SEND_TG=false; fi
 
-if [[ -n "$TG_BOT_TOKEN" && -n "$TG_CHAT_ID" && "$SEND_TG" == true ]]; then
-    MSG="
-<b>✨ <u>Cloudflare DNS 更新提醒</u></b>
-
-<b>🔤 解析域名：</b> $DOMAIN_NAME 
-
-<b>🌟 新 IP 地址：</b> <code>$CURRENT_IP</code>
-
-<b>🌏 IP 信息：</b>
-• <b>国家地区：</b> $COUNTRY  
-• <b>城   市：</b> $CITY  
-• <b>时   区：</b> $TIMEZONE  
-
-<b>⏰ 更新时间：</b> <code>$CURRENT_TIME</code>
-
-
-<i>🎉 更新完成！感谢使用，祝您一切顺利！</i>
-"
-
+send_tg_msg(){
+    local MSG="$1"
     for ((i=1;i<=MAX_RETRIES;i++)); do
         curl -s -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
             -d "chat_id=$TG_CHAT_ID" \
             --data-urlencode "text=$MSG" \
-            -d "parse_mode=HTML" > /dev/null 2>&1 && break
+            -d "parse_mode=HTML" >/dev/null 2>&1 && return 0
         sleep 2
     done
+}
+
+# ======= 成功通知：遵守夜间静默 =======
+if [[ "$SUCCESS" == "true" ]]; then
+
+    if (( HOUR >= 0 && HOUR < 6 )); then
+        log "夜间静默：成功通知未发送"
+        exit 0
+    fi
+
+    MSG="
+<b>✨ <u>Cloudflare DNS 更新成功</u></b>
+
+<b>🔤 域名：</b> <code>$DOMAIN_NAME</code>
+<b>🌟 新 IP：</b> <code>$CURRENT_IP</code>
+
+<b>🌏 IP 信息：</b>
+• 国家：$COUNTRY
+• 城市：$CITY
+• 时区：$TIMEZONE
+• ISP：$ISP
+
+<b>⏰ 时间：</b> <code>$CURRENT_TIME</code>
+
+<i>🎉 DNS 记录已成功更新！</i>
+"
+    send_tg_msg "$MSG"
+    exit 0
 fi
+
+# ======= 失败通知：必须发送 =======
+ERROR_MSG=$(echo "$UPDATE_RESULT" | jq -r '.errors | tostring')
+
+MSG="
+<b>❌ <u>Cloudflare DNS 更新失败</u></b>
+
+<b>🔤 域名：</b> <code>$DOMAIN_NAME</code>
+
+<b>🚫 错误原因：</b>
+<code>$ERROR_MSG</code>
+
+<b>⏰ 时间：</b> <code>$CURRENT_TIME</code>
+
+<i>⚠ 请检查 API Token、Zone ID、DNS 记录是否正确。</i>
+"
+
+send_tg_msg "$MSG"
+
 EOF
 
 chmod +x $SCRIPT_FILE
@@ -231,13 +269,13 @@ chmod +x $SCRIPT_FILE
 add_cron(){
     if command -v crontab >/dev/null 2>&1; then
         if crontab -l 2>/dev/null | grep -q "$SCRIPT_FILE"; then
-            echo "⏰ 定时任务已存在，无需重复添加！"
+            echo "⏰ 定时任务已存在"
         else
-            (crontab -l 2>/dev/null; echo "0 * * * * $SCRIPT_FILE > /dev/null 2>&1") | crontab -
-            echo "⏰ 已创建定时任务（每小时执行一次）"
+            (crontab -l 2>/dev/null; echo "*/10 * * * * $SCRIPT_FILE > /dev/null 2>&1") | crontab -
+            echo "⏰ 已创建定时任务：每 10 分钟执行一次"
         fi
     else
-        echo "⚠️ crontab 未找到，请手动设置定时任务"
+        echo "⚠️ 未找到 crontab，请手动设置"
     fi
 }
 
@@ -261,7 +299,7 @@ uninstall(){
     if command -v crontab >/dev/null 2>&1; then
         crontab -l | grep -v "cf_ddds_run.sh" | crontab -
     fi
-    echo "🗑️ 已卸载并清理所有生成文件和定时任务，配置文件已保留。"
+    echo "🗑️ 已卸载（配置文件保留）"
 }
 
 menu
