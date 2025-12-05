@@ -1,6 +1,6 @@
 #!/bin/bash
 
-SCRIPT_VERSION="v1.2.1"  # 修复 08/09 报错的版本
+SCRIPT_VERSION="v1.2.3"  # 最终版，每小时执行一次
 
 CONFIG_FILE="/etc/cf_ddds.conf"
 SCRIPT_FILE="/usr/local/bin/cf_ddds_run.sh"
@@ -133,7 +133,7 @@ upgrade(){
 create_run_script(){
 cat > $SCRIPT_FILE <<'EOF'
 #!/bin/bash
-SCRIPT_VERSION="v1.2.1"
+SCRIPT_VERSION="v1.2.3"
 source /etc/cf_ddds.conf
 
 MAX_RETRIES=3
@@ -203,9 +203,8 @@ else
     log "DNS 更新失败：$UPDATE_RESULT"
 fi
 
-# ================== Telegram 通知（成功/失败区分，已修复小时解析） ==================
-# 使用 printf 强制十进制，避免 "08"/"09" 被当成八进制导致 (( )) 报错
-HOUR=$(printf "%d" $(TZ='Asia/Shanghai' date +%H))
+# ================== Telegram 通知 ==================
+HOUR=$(TZ='Asia/Shanghai' date +%-H)
 
 send_tg_msg(){
     local MSG="$1"
@@ -218,14 +217,12 @@ send_tg_msg(){
     done
 }
 
-# ======= 成功通知：遵守夜间静默（0-6 点） =======
+# 成功通知（夜间静默 0-6 点）
 if [[ "$SUCCESS" == "true" ]]; then
-
     if (( HOUR >= 0 && HOUR < 6 )); then
         log "夜间静默：成功通知未发送"
         exit 0
     fi
-
     MSG="
 <b>✨ <u>Cloudflare DNS 更新成功</u></b>
 
@@ -242,14 +239,11 @@ if [[ "$SUCCESS" == "true" ]]; then
 
 <i>🎉 DNS 记录已成功更新！</i>
 "
-    # 只有在配置了 TG 且 Chat ID 存在时才发送
-    if [[ -n "$TG_BOT_TOKEN" && -n "$TG_CHAT_ID" ]]; then
-        send_tg_msg "$MSG"
-    fi
+    [[ -n "$TG_BOT_TOKEN" && -n "$TG_CHAT_ID" ]] && send_tg_msg "$MSG"
     exit 0
 fi
 
-# ======= 失败通知：必须发送（不受夜间静默影响） =======
+# 失败通知（必发）
 ERROR_MSG=$(echo "$UPDATE_RESULT" | jq -r '.errors | tostring')
 
 MSG="
@@ -264,24 +258,22 @@ MSG="
 
 <i>⚠ 请检查 API Token、Zone ID、DNS 记录是否正确。</i>
 "
-
-if [[ -n "$TG_BOT_TOKEN" && -n "$TG_CHAT_ID" ]]; then
-    send_tg_msg "$MSG"
-fi
+[[ -n "$TG_BOT_TOKEN" && -n "$TG_CHAT_ID" ]] && send_tg_msg "$MSG"
 
 EOF
 
 chmod +x $SCRIPT_FILE
 }
 
-# ================== 添加定时任务 ==================
+# ================== 添加定时任务（每小时一次） ==================
 add_cron(){
     if command -v crontab >/dev/null 2>&1; then
         if crontab -l 2>/dev/null | grep -q "$SCRIPT_FILE"; then
             echo "⏰ 定时任务已存在"
         else
-            (crontab -l 2>/dev/null; echo "*/10 * * * * $SCRIPT_FILE > /dev/null 2>&1") | crontab -
-            echo "⏰ 已创建定时任务：每 10 分钟执行一次"
+            # 每小时执行一次
+            (crontab -l 2>/dev/null; echo "0 * * * * $SCRIPT_FILE > /dev/null 2>&1") | crontab -
+            echo "⏰ 已创建定时任务：每小时执行一次"
         fi
     else
         echo "⚠️ 未找到 crontab，请手动设置"
