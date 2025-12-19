@@ -1,300 +1,306 @@
-export default {
-    async fetch(req, env) {
-        return new Response(await runDDNS(env), {
-            headers: { "Content-Type": "text/plain; charset=utf-8" }
-        });
-    },
-    async scheduled(event, env, ctx) {
-        ctx.waitUntil(runDDNS(env));
-    }
-};
+#!/bin/bash
 
-// ================= 主流程 =================
-async function runDDNS(env) {
-    try {
-        // ===== 0 点尝试发送日报 =====
-        await trySendDailyReport(env);
+SCRIPT_VERSION="v1.2.3"  # 最终版，每小时执行一次
 
-        // ===== 获取 IPv4 =====
-        const ipResult = await getIPv4FromSource();
-        if (!ipResult.ok) {
-            await sendTG(env, ipResult.error, null, "ip_error");
-            return "IP 获取失败";
-        }
-        const ipv4 = ipResult.ip;
+CONFIG_FILE="/etc/cf_ddds.conf"
+SCRIPT_FILE="/usr/local/bin/cf_ddds_run.sh"
+IP_FILE="/var/lib/cf_last_ip.txt"
+LOG_DIR="/var/log"
+LOG_FILE="$LOG_DIR/cf_ddds.log"
+MAX_RETRIES=3
 
-        // ===== IP 信息 =====
-        const ipinfo = await getIPInfo(ipv4);
-
-        // ===== IP 未变化 =====
-        const lastIP = await env.KV.get("ddns_last_ip") || "";
-        if (lastIP === ipv4) return "IP 未变化";
-
-        // ===== 更新 DNS =====
-        const result = await updateARecord(env, env.ZONE_ID, env.DOMAIN, ipv4);
-        if (!result.ok) {
-            await sendTG(env, result.error, null, "error");
-            return "DNS 更新失败";
-        }
-
-        // ===== 更新成功 =====
-        await env.KV.put("ddns_last_ip", ipv4);
-
-        // ---------- 6 小时统计 ----------
-        const countKey = "ddns_success_count";
-        const historyKey = "ddns_ip_history";
-
-        const count = Number(await env.KV.get(countKey) || 0) + 1;
-        await env.KV.put(countKey, String(count));
-
-        let history = JSON.parse(await env.KV.get(historyKey) || "[]");
-        history.push({ ip: ipv4, time: getBeijingTime() });
-        if (history.length > 20) history = history.slice(-20);
-        await env.KV.put(historyKey, JSON.stringify(history));
-
-        // ---------- 固定 6 小时槽位提醒 ----------
-        const currentSlot = get6HourSlotKey();
-        const lastSlot = await env.KV.get("ddns_6h_slot");
-
-        if (currentSlot !== lastSlot) {
-            await sendTG(env, ipv4, ipinfo, "success", {
-                hours: 6,
-                count,
-                history
-            });
-
-            await env.KV.put("ddns_6h_slot", currentSlot);
-            await env.KV.put(countKey, "0");
-            await env.KV.put(historyKey, "[]");
-        }
-
-        // ---------- 日报统计 ----------
-        await recordDaily(env, ipv4);
-
-        return "更新完成";
-
-    } catch (e) {
-        await sendTG(env, e.message, null, "error");
-        return "Worker 异常";
-    }
+# ================== 系统依赖检查 ==================
+install_dependencies(){
+    echo "🔧 检查依赖 curl 和 jq..."
+    for cmd in curl jq; do
+        if ! command -v $cmd >/dev/null 2>&1; then
+            echo "$cmd 未安装，尝试安装..."
+            if [[ -f /etc/debian_version ]]; then
+                apt-get update && apt-get install -y $cmd
+            elif [[ -f /etc/redhat-release ]]; then
+                yum install -y $cmd
+            elif [[ -f /etc/alpine-release ]]; then
+                apk add --no-cache $cmd
+            else
+                echo "请手动安装 $cmd"
+                exit 1
+            fi
+        fi
+    done
 }
 
-// ================= IPv4 获取 =================
-async function getIPv4FromSource() {
-    try {
-        const res = await fetch("https://ip.164746.xyz/ipTop.html");
-        if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+# ================== 菜单 ==================
+menu(){
+    clear
+    echo "======== Cloudflare DDNS 自动更新 ========"
+    echo "脚本版本: $SCRIPT_VERSION"
+    echo "1) 安装/配置"
+    echo "2) 升级脚本（保留配置）"
+    echo "3) 卸载"
+    echo "4) 手动运行一次"
+    echo "5) 查看日志"
+    echo "6) 强制更新一次"
+    echo "0) 退出"
+    echo "----------------------------------------"
+    read -p "请输入选择: " num
 
-        const html = await res.text();
-        const match = html.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/);
-        if (!match) return { ok: false, error: "未解析到 IPv4" };
-
-        return { ok: true, ip: match[0] };
-    } catch (e) {
-        return { ok: false, error: e.message };
-    }
+    case $num in
+        1) install ;;
+        2) upgrade ;;
+        3) uninstall ;;
+        4) bash $SCRIPT_FILE ;;
+        5) tail -n 50 $LOG_FILE ;;
+        6) bash $SCRIPT_FILE force ;;
+        0) exit ;;
+        *) echo "❌ 输入无效" && sleep 1 && menu ;;
+    esac
 }
 
-// ================= IP 信息 =================
-async function getIPInfo(ip) {
-    try {
-        const r = await fetch(`https://api.vore.top/api/IPdata?ip=${ip}`);
-        const d = await r.json();
-        if (d.code === 200) {
-            return {
-                country: d.ipdata.info1,
-                region: d.ipdata.info2,
-                city: d.ipdata.info3,
-                isp: d.ipdata.isp
-            };
-        }
-    } catch {}
+# ================== 安装流程 ==================
+install(){
+    install_dependencies
 
-    try {
-        const r = await fetch(`http://ip-api.com/json/${ip}?lang=zh-CN`);
-        const d = await r.json();
-        if (d.status === "success") {
-            return {
-                country: d.country,
-                region: d.regionName,
-                city: d.city,
-                isp: d.isp
-            };
-        }
-    } catch {}
+    mkdir -p /var/lib
+    mkdir -p $LOG_DIR
 
-    return {};
+    [[ ! -f "$CONFIG_FILE" ]] && touch $CONFIG_FILE
+    [[ ! -f "$IP_FILE" ]] && touch $IP_FILE
+    [[ ! -f "$LOG_FILE" ]] && touch $LOG_FILE
+
+    chmod 600 $CONFIG_FILE
+
+    echo "🔑 输入 Cloudflare API Token:"
+    read CF_API_TOKEN
+    echo "🌍 输入 Zone ID:"
+    read ZONE_ID
+    echo "🔤 请输入解析域名 (如: ddns.example.com):"
+    read DOMAIN_NAME
+
+    # 自动获取 DNS Record ID
+    DNS_RECORD_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records?type=A&name=$DOMAIN_NAME" \
+        -H "Authorization: Bearer $CF_API_TOKEN" \
+        -H "Content-Type: application/json" | jq -r '.result[0].id')
+
+    if [[ -z "$DNS_RECORD_ID" || "$DNS_RECORD_ID" == "null" ]]; then
+        echo "❌ 未找到 $DOMAIN_NAME 的 A 记录，请先在 Cloudflare 添加该记录。"
+        exit 1
+    else
+        echo "✅ 已自动获取 DNS Record ID: $DNS_RECORD_ID"
+    fi
+
+    echo "📨 是否启用 Telegram 通知? (y/n)"
+    read TG_CHOICE
+    if [[ $TG_CHOICE == y ]]; then
+        read -p "Bot Token: " TG_BOT_TOKEN
+        read -p "Chat ID: " TG_CHAT_ID
+    else
+        TG_BOT_TOKEN=""
+        TG_CHAT_ID=""
+    fi
+
+cat > $CONFIG_FILE <<EOF
+CF_API_TOKEN="$CF_API_TOKEN"
+ZONE_ID="$ZONE_ID"
+DNS_RECORD_ID="$DNS_RECORD_ID"
+DOMAIN_NAME="$DOMAIN_NAME"
+TG_BOT_TOKEN="$TG_BOT_TOKEN"
+TG_CHAT_ID="$TG_CHAT_ID"
+EOF
+
+    chmod 600 $CONFIG_FILE
+
+    create_run_script
+    add_cron
+    setup_logrotate
+
+    echo "✨ 安装完成 → DDNS 已启动！"
 }
 
-// ================= Cloudflare 更新 =================
-async function updateARecord(env, zoneId, domain, ipv4) {
-    try {
-        const list = await fetch(
-            `https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records?type=A&name=${domain}`,
-            { headers: { Authorization: `Bearer ${env.CF_API}` } }
-        ).then(r => r.json());
-
-        const record = list.result?.[0];
-        if (!record) return { ok: false, error: "未找到 A 记录" };
-
-        const res = await fetch(
-            `https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records/${record.id}`,
-            {
-                method: "PUT",
-                headers: {
-                    Authorization: `Bearer ${env.CF_API}`,
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify({
-                    type: "A",
-                    name: domain,
-                    content: ipv4,
-                    ttl: 120
-                })
-            }
-        ).then(r => r.json());
-
-        return res.success ? { ok: true } : { ok: false, error: JSON.stringify(res.errors) };
-    } catch (e) {
-        return { ok: false, error: e.message };
-    }
+# ================== 升级流程 ==================
+upgrade(){
+    install_dependencies
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        echo "❌ 配置文件不存在，请先安装"
+        exit 1
+    fi
+    echo "🔄 升级中..."
+    create_run_script
+    add_cron
+    echo "✅ 升级完成"
 }
 
-// ================= 日报 =================
-async function recordDaily(env, ipv4) {
-    const today = getBeijingDate();
-    const key = "ddns_daily_date";
+# ================== 创建主运行脚本 ==================
+create_run_script(){
+cat > $SCRIPT_FILE <<'EOF'
+#!/bin/bash
+SCRIPT_VERSION="v1.2.3"
+source /etc/cf_ddds.conf
 
-    const stored = await env.KV.get(key);
-    if (stored !== today) {
-        await env.KV.put(key, today);
-        await env.KV.put("ddns_daily_history", "[]");
-        await env.KV.put("ddns_daily_count", "0");
-    }
+MAX_RETRIES=3
+IP_FILE="/var/lib/cf_last_ip.txt"
+LOG_FILE="/var/log/cf_ddds.log"
 
-    let history = JSON.parse(await env.KV.get("ddns_daily_history") || "[]");
-    history.push({ ip: ipv4, time: getBeijingTime() });
-    await env.KV.put("ddns_daily_history", JSON.stringify(history));
-
-    const count = Number(await env.KV.get("ddns_daily_count") || 0) + 1;
-    await env.KV.put("ddns_daily_count", String(count));
+log(){
+    echo "[$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')] $1" >> $LOG_FILE
 }
 
-async function trySendDailyReport(env) {
-    if (getBeijingHour() !== 0) return;
+log "运行 Cloudflare DDNS 脚本 $SCRIPT_VERSION"
 
-    const today = getBeijingDate();
-    const sent = await env.KV.get("ddns_daily_date");
-    if (sent === `${today}_sent`) return;
+# ================== 获取当前 IP ==================
+CURRENT_IP=""
+for ((i=1;i<=MAX_RETRIES;i++)); do
+    CURRENT_IP=$(curl -s --max-time 10 'https://ip.164746.xyz/ipTop.html' | cut -d',' -f1)
+    [[ -n "$CURRENT_IP" ]] && break
+    sleep 2
+done
 
-    const history = JSON.parse(await env.KV.get("ddns_daily_history") || "[]");
-    const count = Number(await env.KV.get("ddns_daily_count") || 0);
-    const lastIP = await env.KV.get("ddns_last_ip") || "未知";
-    const ipinfo = lastIP !== "未知" ? await getIPInfo(lastIP) : {};
+if [[ -z "$CURRENT_IP" ]]; then
+    log "获取公网 IP 失败"
+    exit 1
+fi
 
-    await sendTG(env, lastIP, ipinfo, "daily", {
-        date: today,
-        count,
-        history
-    });
+CURRENT_TIME=$(TZ="Asia/Shanghai" date "+%Y-%m-%d %H:%M:%S")
+LAST_IP=$(cat $IP_FILE 2>/dev/null || echo "")
 
-    await env.KV.put("ddns_daily_date", `${today}_sent`);
+# ================== 检查 IP 是否变化 ==================
+if [[ "$CURRENT_IP" == "$LAST_IP" && "$1" != "force" ]]; then
+    log "IP 未变化 → $CURRENT_IP"
+    exit 0
+fi
+
+# ================== 获取 IP 详细信息 ==================
+IP_INFO=""
+STATUS=""
+for ((i=1;i<=MAX_RETRIES;i++)); do
+    IP_INFO=$(curl -s --max-time 10 "http://ip-api.com/json/$CURRENT_IP?lang=zh-CN")
+    STATUS=$(echo "$IP_INFO" | jq -r '.status')
+    [[ "$STATUS" == "success" ]] && break
+    sleep 2
+done
+
+if [[ "$STATUS" != "success" ]]; then
+    log "IP 信息获取失败"
+    exit 1
+fi
+
+COUNTRY=$(echo "$IP_INFO" | jq -r '.country')
+CITY=$(echo "$IP_INFO" | jq -r '.city')
+TIMEZONE=$(echo "$IP_INFO" | jq -r '.timezone')
+ISP=$(echo "$IP_INFO" | jq -r '.isp')
+
+# ================== 更新 Cloudflare DNS ==================
+UPDATE_RESULT=$(curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records/$DNS_RECORD_ID" \
+    -H "Authorization: Bearer $CF_API_TOKEN" \
+    -H "Content-Type: application/json" \
+    --data "{\"type\":\"A\",\"name\":\"$DOMAIN_NAME\",\"content\":\"$CURRENT_IP\",\"ttl\":120,\"proxied\":false}")
+
+SUCCESS=$(echo "$UPDATE_RESULT" | jq -r '.success')
+
+if [[ "$SUCCESS" == "true" ]]; then
+    echo "$CURRENT_IP" > $IP_FILE
+    log "DNS 更新成功 → $DOMAIN_NAME = $CURRENT_IP"
+else
+    log "DNS 更新失败：$UPDATE_RESULT"
+fi
+
+# ================== Telegram 通知 ==================
+HOUR=$(TZ='Asia/Shanghai' date +%-H)
+
+send_tg_msg(){
+    local MSG="$1"
+    for ((i=1;i<=MAX_RETRIES;i++)); do
+        curl -s -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
+            -d "chat_id=$TG_CHAT_ID" \
+            --data-urlencode "text=$MSG" \
+            -d "parse_mode=HTML" >/dev/null 2>&1 && return 0
+        sleep 2
+    done
 }
 
-// ================= Telegram =================
-async function sendTG(env, info, ipinfo, type, stats = {}) {
-    if (!env.TG_BOT_TOKEN || !env.TG_CHAT_ID) return;
+# 成功通知（夜间静默 0-6 点）
+if [[ "$SUCCESS" == "true" ]]; then
+    if (( HOUR >= 0 && HOUR < 6 )); then
+        log "夜间静默：成功通知未发送"
+        exit 0
+    fi
+    MSG="
+<b>✨ <u>Cloudflare DNS 更新成功</u></b>
 
-    const time = getBeijingTime();
-    let msg = "";
+<b>🔤 域名：</b> <code>$DOMAIN_NAME</code>
+<b>🌟 新 IP：</b> <code>$CURRENT_IP</code>
 
-    // ---------- 优化 IP 历史显示 ----------
-    let historyText = "无";
-    if (stats.history && stats.history.length) {
-        historyText = stats.history
-            .map((h, i) => `${i + 1}. <code>${h.ip}</code>    <i>${h.time}</i>`)
-            .join("\n");
-    }
+<b>🌏 IP 信息：</b>
+• 国家：$COUNTRY
+• 城市：$CITY
+• 时区：$TIMEZONE
+• ISP：$ISP
 
-    if (type === "success") {
-        msg = `
-<b>🕒 Cloudflare DDNS 6 小时汇总</b>
+<b>⏰ 时间：</b> <code>$CURRENT_TIME</code>
 
-<b>${env.DOMAIN}</b>
-<b>更新次数：</b>${stats.count}
+<i>🎉 DNS 记录已成功更新！</i>
+"
+    [[ -n "$TG_BOT_TOKEN" && -n "$TG_CHAT_ID" ]] && send_tg_msg "$MSG"
+    exit 0
+fi
 
-<b>IP 变化历史：</b>
-${historyText}
+# 失败通知（必发）
+ERROR_MSG=$(echo "$UPDATE_RESULT" | jq -r '.errors | tostring')
 
-<b>当前 IP：</b>${info}
-<b>运营商：</b>${ipinfo?.isp || "未知"}
-<b>时间：</b>${time}
-`;
-    } else if (type === "daily") {
-        msg = `
-<b>📅 Cloudflare DDNS 日报</b>
+MSG="
+<b>❌ <u>Cloudflare DNS 更新失败</u></b>
 
-<b>${env.DOMAIN}</b>
-<b>日期：</b>${stats.date}
-<b>更新次数：</b>${stats.count}
+<b>🔤 域名：</b> <code>$DOMAIN_NAME</code>
 
-<b>IP 变化记录：</b>
-${historyText}
+<b>🚫 错误原因：</b>
+<code>$ERROR_MSG</code>
 
-<b>当前 IP：</b>${info}
-<b>运营商：</b>${ipinfo?.isp || "未知"}
-<b>时间：</b>${time}
-`;
-    } else if (type === "ip_error") {
-        msg = `
-<b>🚨 DDNS IP 获取失败</b>
+<b>⏰ 时间：</b> <code>$CURRENT_TIME</code>
 
-来源：ip.164746.xyz
-错误：${info}
-时间：${time}
-`;
-    } else {
-        msg = `
-<b>❌ Cloudflare DDNS 错误</b>
+<i>⚠ 请检查 API Token、Zone ID、DNS 记录是否正确。</i>
+"
+[[ -n "$TG_BOT_TOKEN" && -n "$TG_CHAT_ID" ]] && send_tg_msg "$MSG"
 
-域名：${env.DOMAIN}
-信息：${info}
-时间：${time}
-`;
-    }
+EOF
 
-    await fetch(`https://api.telegram.org/bot${env.TG_BOT_TOKEN}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-            chat_id: env.TG_CHAT_ID,
-            text: msg,
-            parse_mode: "HTML"
-        })
-    });
+chmod +x $SCRIPT_FILE
 }
 
-// ================= 时间工具 =================
-function getBeijingTime() {
-    return new Date(Date.now() + 8 * 3600 * 1000)
-        .toISOString()
-        .replace("T", " ")
-        .split(".")[0];
+# ================== 添加定时任务（每小时一次） ==================
+add_cron(){
+    if command -v crontab >/dev/null 2>&1; then
+        if crontab -l 2>/dev/null | grep -q "$SCRIPT_FILE"; then
+            echo "⏰ 定时任务已存在"
+        else
+            # 每小时执行一次
+            (crontab -l 2>/dev/null; echo "0 * * * * $SCRIPT_FILE > /dev/null 2>&1") | crontab -
+            echo "⏰ 已创建定时任务：每小时执行一次"
+        fi
+    else
+        echo "⚠️ 未找到 crontab，请手动设置"
+    fi
 }
 
-function getBeijingDate() {
-    return new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+# ================== 日志轮换 ==================
+setup_logrotate(){
+    cat >/etc/logrotate.d/cf_ddds <<EOF
+$LOG_FILE {
+    daily
+    rotate 7
+    compress
+    missingok
+    notifempty
+    copytruncate
+}
+EOF
 }
 
-function getBeijingHour() {
-    return new Date(Date.now() + 8 * 3600 * 1000).getUTCHours();
+# ================== 卸载 ==================
+uninstall(){
+    rm -f $SCRIPT_FILE $IP_FILE $LOG_FILE /etc/logrotate.d/cf_ddds
+    if command -v crontab >/dev/null 2>&1; then
+        crontab -l | grep -v "cf_ddds_run.sh" | crontab -
+    fi
+    echo "🗑️ 已卸载（配置文件保留）"
 }
 
-function get6HourSlotKey() {
-    const h = getBeijingHour();
-    const slot =
-        h < 6 ? "00-06" :
-        h < 12 ? "06-12" :
-        h < 18 ? "12-18" : "18-24";
-    return `${getBeijingDate()}_${slot}`;
-}
+menu
